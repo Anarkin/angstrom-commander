@@ -1,6 +1,6 @@
 # Angstrom
 
-Product name: **Angstrom** (unit-of-distance naming à la Parsec — all your machines, an ångström apart). The repo was started under the working title `nucleoreaction` and is being renamed to match the product.
+Product name: **Angstrom** (unit-of-distance naming à la Parsec — all your machines, an ångström apart). Repo: <https://github.com/Anarkin/Angstrom>.
 
 ## Conventions
 
@@ -84,7 +84,6 @@ Diagrams: see the Diagrams section at the bottom.
 - Hosting: **Microsoft Foundry** (Azure's model-as-a-service, formerly Azure AI Foundry) — serverless pay-per-token inference, resource lives in the environment's stamp (Terraform), Entra ID/API-key auth, billed through the Azure subscription
 - Mechanism: agent loop in the **Server** — the LLM's tools are the existing relayed Daemon file ops (list/stat/move/rename/mkdir); Server executes each tool call over the Daemon's outbound WebSocket and feeds results back until the model finishes. No new component; Daemon unchanged
 - Safety: Daemon path sandboxing bounds the AI exactly like any client; destructive/mutating ops require user confirmation in the client before execution; no delete tool in v1
-- Open: model family (Claude via `Anthropic.Foundry` SDK vs Azure OpenAI GPT — same Foundry resource either way); decide when the feature is scheduled
 
 ## Security model
 
@@ -92,13 +91,14 @@ Diagrams: see the Diagrams section at the bottom.
 - Daemon identity = keypair generated at enrollment; the Server stores only the public key (DB leak ≠ Daemon impersonation); revoking a registration kills that machine's access
 - Enrollment: Daemon shows a short-lived one-time pairing code, user enters it in a logged-in WebClient or MobileClient (TV-pairing style)
 - Path sandboxing in the Daemon: canonicalize all client-supplied paths, enforce allowed roots (no traversal)
+- AI assistant: the LLM acts only through the same relayed, sandboxed file ops as any client — it gets no extra access path; mutating ops additionally require explicit user confirmation
 
 ## Hosting & infrastructure
 
 See the "Provisioning & deployment" diagram at the bottom for how the pieces fit together.
 
 - Azure hosts everything hostable (Server, WebClient)
-- Azure services: Azure Container Apps (Server — WebSockets, scale to zero), Static Web Apps (WebClient hosting), Azure Container Registry
+- Azure services: Azure Container Apps (Server — WebSockets, scale to zero), Static Web Apps (WebClient hosting), Azure Container Registry, Microsoft Foundry (LLM inference for the AI assistant — serverless, no idle cost)
 - Infrastructure as code: Terraform (via azd's Terraform provider) — `azd up` provisions + deploys; remote state in an Azure Storage account
 - Environments are first-class: `azd env new <name>` + `azd up` spawns a full isolated env (test, qa, per-feature-branch demos, prod); one resource group per env; `azd down` tears it down. Prod is the same stamp with different variables (sizes/SKUs), never a hand-built special case
 - `azd up` is idempotent: per resource Terraform no-ops, updates in place, or (only for immutable attribute changes) destroys-and-recreates — the plan marks replacements explicitly. Manual portal edits are drift and get reverted on the next apply; the `.tf` files always win
@@ -121,6 +121,7 @@ See the "Provisioning & deployment" diagram at the bottom for how the pieces fit
 
 - Azure hosting flavor for PostgreSQL: Flexible Server (stoppable, not auto-pause) vs Postgres-in-a-container for throwaway demo envs
 - Direct P2P connection upgrade (Parsec-style) as a later optimization vs relay-only
+- AI assistant model family: Claude (official `Anthropic.Foundry` .NET SDK) vs Azure OpenAI GPT — same Foundry resource and tool-calling pattern either way; decide when the feature is scheduled
 
 ## Diagrams
 
@@ -242,6 +243,7 @@ flowchart TB
       aca["Container Apps<br/><i>pulls + runs Server image</i>"]
       pg[("PostgreSQL<br/><i>schema self-initializes<br/>via EF Core migrations</i>")]
       swa["Static Web Apps<br/><i>serves WebClient bundle</i>"]
+      foundry["Microsoft Foundry<br/><i>LLM endpoint for the<br/>AI assistant</i>"]
     end
     rg2["angstrom-test, angstrom-demo-featX …<br/><i>identical stamps from the same .tf files,<br/>azd down deletes a whole stamp</i>"]
   end
