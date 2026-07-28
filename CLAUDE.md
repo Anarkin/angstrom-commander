@@ -79,6 +79,13 @@ Diagrams: see the Diagrams section at the bottom.
 **WebClient & MobileClient**
 - Configurable server URL (build config in WebClient, build flavor/hidden setting in MobileClient) so any build can target any environment
 
+**Planned: AI file-management assistant** (not scheduled yet; direction decided)
+- Feature: user asks in natural language ("organize my Downloads by file type") and an LLM performs the file operations
+- Hosting: **Microsoft Foundry** (Azure's model-as-a-service, formerly Azure AI Foundry) — serverless pay-per-token inference, resource lives in the environment's stamp (Terraform), Entra ID/API-key auth, billed through the Azure subscription
+- Mechanism: agent loop in the **Server** — the LLM's tools are the existing relayed Daemon file ops (list/stat/move/rename/mkdir); Server executes each tool call over the Daemon's outbound WebSocket and feeds results back until the model finishes. No new component; Daemon unchanged
+- Safety: Daemon path sandboxing bounds the AI exactly like any client; destructive/mutating ops require user confirmation in the client before execution; no delete tool in v1
+- Open: model family (Claude via `Anthropic.Foundry` SDK vs Azure OpenAI GPT — same Foundry resource either way); decide when the feature is scheduled
+
 ## Security model
 
 - TLS everywhere; WebClient and MobileClient authenticate with JWT access tokens + hashed refresh tokens (revocable per device)
