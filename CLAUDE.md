@@ -100,6 +100,7 @@ See the "Provisioning & deployment" diagram at the bottom for how the pieces fit
 ## Source control & CI/CD
 
 - GitHub hosts the repo (private, personal account — free tier is ample for solo, incl. 2,000 Actions minutes/month)
+- Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/): `type: subject` or `type(scope): subject` — e.g. `feat(daemon): stream file downloads`. Common types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`, `ci`, `build`
 - CI/CD: GitHub Actions; `azd pipeline config` bootstraps the workflow + OIDC federated identity to Azure (no cloud secrets stored in GitHub)
 - Every PR runs the full guardrail suite: build (warnings = errors), tests, `dotnet format`, ESLint/Prettier, `terraform fmt`/`validate`
 - Later: PR-open spawns a demo env (`azd up` for `demo-prN`), PR-close tears it down
