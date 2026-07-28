@@ -14,6 +14,7 @@ Product name: **Angstrom** (unit-of-distance naming à la Parsec — all your ma
 - Dual-pane file manager (Total Commander clone)
 - Parsec-like model: a Daemon runs on each of the user's machines; one user account manages multiple machines from WebClient or MobileClient
 - Cloud-based from day one — no VPN/LAN-only setup, no port forwarding expected from users
+- AI-operable from day one: natural-language file tasks via the built-in assistant (Agent), or via any MCP client the user brings (Claude Code etc.)
 
 ## System components
 
@@ -39,7 +40,7 @@ Besides the products, the repo carries supporting codebases — authored and rev
 
 Heavy emphasis on guardrails across the whole repo: every cheap, automatable quality gate is turned on from day one, and everything is enforced in CI on every PR — a guardrail that isn't enforced doesn't exist. Tests everywhere: every component has a test setup from its first commit, and new code is expected to come with tests.
 
-**Daemon + Server (.NET)**
+**Daemon + Server + Agent (.NET)**
 - `TreatWarningsAsErrors` + `AnalysisLevel: latest-all` (.NET analyzers) + `EnforceCodeStyleInBuild`, centralized in a root `Directory.Build.props`
 - Nullable reference types enabled everywhere
 - `.editorconfig` at repo root as the single source of style truth — already in place (full C# naming rules, EF Core `Migrations/` exempted as generated code); `dotnet format` verified in CI
@@ -66,7 +67,7 @@ Diagrams: see the Diagrams section at the bottom.
 - Dials out to the Server via persistent outbound connection
 
 **Server**
-- Relays traffic between WebClient/MobileClient and Daemons over the Daemons' outbound connections:
+- Relays traffic between clients (WebClient, MobileClient, MCP clients incl. the Agent) and Daemons over the Daemons' outbound connections:
   - Each Daemon holds one persistent outbound WebSocket (SignalR, port 443) open to the Server; the Server routes client requests down it and matches responses back
   - Correlation IDs multiplex many concurrent operations over the one socket
   - Works through NAT/firewalls because an established TCP connection is bidirectional regardless of who initiated it
@@ -77,7 +78,7 @@ Diagrams: see the Diagrams section at the bottom.
   - Consequence: any MCP client (Claude Code, Claude Desktop, ChatGPT, …) can operate the user's machines using the user's own AI subscription — third-party agents get no special access path
 - DB stores coordination metadata only:
   - Daemon registrations: display name, Daemon public key, platform/OS/version, created / last_seen / revoked timestamps
-  - Sessions (WebClient/MobileClient logins): hashed refresh token, device info, timestamps + revocation (enables an "active sessions" page)
+  - Sessions — WebClient/MobileClient logins, PATs, and OAuth grants for MCP clients: hashed token, device/client info, scopes, timestamps + revocation (enables an "active sessions" page covering humans and AI alike)
   - Short-lived one-time enrollment (pairing) codes
 - NOT in the DB: file data/metadata, the Daemon's FS config (allowed roots are Daemon-side), and ephemeral state (Daemon online-status, active relay sessions live in memory/Redis)
 - Reached via fixed DNS name (e.g. `api.<domain>.com`); environments = subdomains (`api.qa...`); feature-branch demos use Azure's auto-generated Container Apps URLs
@@ -142,7 +143,7 @@ See the "Provisioning & deployment" diagram at the bottom for how the pieces fit
 flowchart TB
   user(["👤 User"])
 
-  subgraph devices["User's devices"]
+  subgraph devices["User's devices & AI tools"]
     web["WebClient<br/>React<br/><i>dual-pane UI + AI chat pane<br/>(curated model picker)</i>"]
     mobile["MobileClient<br/>React Native<br/><i>iPhone + Android</i>"]
     mcpclients["Third-party MCP clients<br/><i>Claude Code, Claude Desktop, ChatGPT, …<br/>user's own AI subscription</i>"]
@@ -263,7 +264,7 @@ flowchart TB
   state[("Terraform state<br/>Azure Storage account<br/><i>record of what Terraform<br/>already created per environment</i>")]
 
   subgraph azure["Azure subscription"]
-    acr["Container Registry<br/><i>shared — stores Server images</i>"]
+    acr["Container Registry<br/><i>shared — stores Server + Agent images</i>"]
     subgraph rg["Resource group angstrom-qa — ONE STAMP PER ENVIRONMENT"]
       aca["Container Apps<br/><i>pulls + runs Server image</i>"]
       pg[("PostgreSQL<br/><i>schema self-initializes<br/>via EF Core migrations</i>")]
