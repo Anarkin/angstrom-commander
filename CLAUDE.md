@@ -4,7 +4,7 @@ Product name: **Angstrom** (unit-of-distance naming à la Parsec — all your ma
 
 ## Conventions
 
-- Component names: **Daemon**, **Server**, **WebClient**, **MobileClient** — always these exact capitalized names, no synonyms ("agent", "backend", "cloud service", "clients" are all retired). Lowercase "client"/"daemons" may appear only as generic protocol-role words, never as product references.
+- Component names: **Daemon**, **Server**, **WebClient**, **MobileClient**, **Agent** — always these exact capitalized names, no synonyms ("backend", "cloud service", "clients" are all retired). Lowercase "client"/"daemons"/"agent" may appear only as generic protocol-role words (e.g. "an MCP client", "a user's agent"), never as product references.
 - No invented codenames beyond **Angstrom** itself — components get plain descriptive names.
 - This file and its diagrams are living documents — update them in the same change that alters a decision, architecture, or the security model.
 - Mermaid diagrams: use `flowchart` and `sequenceDiagram` syntaxes only; the experimental `C4Context`/`C4Container` syntax is banned (unreadable label layout). No semicolons inside sequence-diagram message text (mermaid parses them as statement separators and the diagram breaks).
@@ -17,21 +17,23 @@ Product name: **Angstrom** (unit-of-distance naming à la Parsec — all your ma
 
 ## System components
 
-The four products we build and ship (infrastructure like the DB is listed with its owning component):
+The five products we build and ship (infrastructure like the DB is listed with its owning component):
 
 1. **Daemon** — installed per machine; exposes that machine's file system over a secure channel. Runs on Windows, macOS, Linux, and inside Linux containers. User-installed, never cloud-hosted.
-2. **Server** — user accounts, Daemon registry, connection brokering/relay. Daemons dial OUT to it (persistent outbound connection), which is why no NAT/firewall config is needed. Backed by PostgreSQL (its only persistent store).
-3. **WebClient** — dual-pane UI in the browser.
+2. **Server** — user accounts, Daemon registry, connection brokering/relay, and the MCP endpoint (the file-op tool surface for AI clients). Daemons dial OUT to it (persistent outbound connection), which is why no NAT/firewall config is needed. Backed by PostgreSQL (its only persistent store).
+3. **WebClient** — dual-pane UI in the browser, incl. the AI chat pane.
 4. **MobileClient** — iPhone + Android.
+5. **Agent** — the built-in AI assistant's agent loop, a container hosted on Foundry Agent Service. Talks to LLMs via Foundry Models and to the Server as an MCP client; never talks to Daemons directly.
 
 Besides the products, the repo carries supporting codebases — authored and reviewed like code, but not shipped to anyone: `infra/` (Terraform + azd definitions of the Azure environments) and `.github/workflows/` (GitHub Actions CI/CD).
 
 ## Tech stack
 
 - **Daemon**: .NET, latest LTS (currently .NET 10); xUnit for tests
-- **Server**: .NET, latest LTS (currently .NET 10); xUnit for tests; PostgreSQL + EF Core (migrations; fresh envs self-initialize schema)
+- **Server**: .NET, latest LTS (currently .NET 10); xUnit for tests; PostgreSQL + EF Core (migrations; fresh envs self-initialize schema); OpenIddict for the OAuth 2.1 authorization server
 - **WebClient**: latest React, TypeScript (strict)
 - **MobileClient**: React Native (iOS + Android), TypeScript (strict)
+- **Agent**: .NET, latest LTS (currently .NET 10) container; xUnit for tests
 
 ## Guardrails
 
@@ -79,11 +81,18 @@ Diagrams: see the Diagrams section at the bottom.
 **WebClient & MobileClient**
 - Configurable server URL (build config in WebClient, build flavor/hidden setting in MobileClient) so any build can target any environment
 
-**AI file-management assistant**
-- Feature: user asks in natural language ("organize my Downloads by file type") and an LLM performs the file operations
-- Hosting: **Microsoft Foundry** (Azure's model-as-a-service, formerly Azure AI Foundry) — serverless pay-per-token inference, resource lives in the environment's stamp (Terraform), Entra ID/API-key auth, billed through the Azure subscription
-- Mechanism: agent loop in the **Server** — the LLM's tools are the existing relayed Daemon file ops (list/stat/move/rename/mkdir); Server executes each tool call over the Daemon's outbound WebSocket and feeds results back until the model finishes. No new component; Daemon unchanged
-- Safety: Daemon path sandboxing bounds the AI exactly like any client; destructive/mutating ops require user confirmation in the client before execution; no delete tool in v1
+**MCP endpoint (part of Server)**
+- The Server exposes the file-op tool surface as a remote MCP server (Streamable HTTP, e.g. `api.<domain>.com/mcp`): the same authorized, relayed, sandboxed ops as the REST API — MCP is a protocol adapter over one tool surface, never a second implementation
+- Auth: OAuth 2.1 (authorization code + PKCE, dynamic client registration; OpenIddict) with Angstrom login + consent pages; personal access tokens as the simpler first step. Both land in the sessions table → visible and revocable on the "active sessions" page like any device
+- Consequence: any MCP client (Claude Code, Claude Desktop, ChatGPT, …) can operate the user's machines using the user's own AI subscription — third-party agents get no special access path
+
+**AI file-management assistant (Agent)**
+- Feature: user asks in natural language ("organize my Downloads by file type") in the WebClient/MobileClient chat pane and an LLM performs the file operations; a curated model picker chooses the LLM
+- LLM: **Foundry Models** (Azure's model-as-a-service) — serverless pay-per-token inference, one endpoint fronting many models (Claude, GPT, …), so the model is a request parameter; resource lives in the environment's stamp
+- Loop: the **Agent** (container on Foundry Agent Service) runs the tool-calling loop — model emits tool calls, the Agent executes them **as an MCP client of the Server's MCP endpoint** with a user-scoped token, feeds results back until the model finishes. The Agent is architecturally just another client: no privileged path, Daemon unchanged
+- Safety: Daemon path sandboxing bounds the AI exactly like any client; destructive/mutating ops require user confirmation in the client before execution; no delete tool in v1; built-in usage burns our Azure tokens → per-user usage limits ship with the feature, not after
+- Build order inside v1 (each step ships on its own, none is rework): core file manager → MCP endpoint with PATs (third-party agents work from here) → OAuth + consent → Agent + model picker
+- Fallback: the Agent is a plain container speaking MCP — if Foundry Agent Service disappoints (GA'd mid-2026), it runs on Container Apps instead with an infra-only change
 
 ## Security model
 
@@ -91,14 +100,14 @@ Diagrams: see the Diagrams section at the bottom.
 - Daemon identity = keypair generated at enrollment; the Server stores only the public key (DB leak ≠ Daemon impersonation); revoking a registration kills that machine's access
 - Enrollment: Daemon shows a short-lived one-time pairing code, user enters it in a logged-in WebClient or MobileClient (TV-pairing style)
 - Path sandboxing in the Daemon: canonicalize all client-supplied paths, enforce allowed roots (no traversal)
-- AI assistant: the LLM acts only through the same relayed, sandboxed file ops as any client — it gets no extra access path; mutating ops additionally require explicit user confirmation
+- AI access: the Agent and third-party MCP clients act only through the Server's MCP endpoint with user-scoped tokens (OAuth 2.1 or PATs) — same authorization and Daemon sandbox as any client, no extra access path; mutating ops additionally require explicit user confirmation; every AI session is listed and revocable on the "active sessions" page
 
 ## Hosting & infrastructure
 
 See the "Provisioning & deployment" diagram at the bottom for how the pieces fit together.
 
-- Azure hosts everything hostable (Server, WebClient)
-- Azure services: Azure Container Apps (Server — WebSockets, scale to zero), Static Web Apps (WebClient hosting), Azure Container Registry, Microsoft Foundry (LLM inference for the AI assistant — serverless, no idle cost)
+- Azure hosts everything hostable (Server, WebClient, Agent)
+- Azure services: Azure Container Apps (Server — WebSockets, scale to zero), Static Web Apps (WebClient hosting), Azure Container Registry, Microsoft Foundry (Foundry Models — serverless LLM inference, no idle cost; Foundry Agent Service — hosts the Agent container)
 - Infrastructure as code: Terraform (via azd's Terraform provider) — `azd up` provisions + deploys; remote state in an Azure Storage account
 - Environments are first-class: `azd env new <name>` + `azd up` spawns a full isolated env (test, qa, per-feature-branch demos, prod); one resource group per env; `azd down` tears it down. Prod is the same stamp with different variables (sizes/SKUs), never a hand-built special case
 - `azd up` is idempotent: per resource Terraform no-ops, updates in place, or (only for immutable attribute changes) destroys-and-recreates — the plan marks replacements explicitly. Manual portal edits are drift and get reverted on the next apply; the `.tf` files always win
@@ -115,13 +124,16 @@ See the "Provisioning & deployment" diagram at the bottom for how the pieces fit
 ## Dev environment
 
 - Everything runs in Docker containers; users likely on Rancher Desktop (Windows)
-- Setup guide should center on a single simple docker command (e.g. `docker compose up`) that brings up Server (+ its PostgreSQL) + WebClient out of the box
+- Setup guide should center on a single simple docker command (e.g. `docker compose up`) that brings up Server (+ its PostgreSQL), WebClient, and the Agent out of the box
+- The Agent runs locally as a plain container (Foundry Agent Service is prod hosting, not a dev dependency); it points at a real Foundry Models endpoint — there is no local LLM, dev inference is pay-per-token against a dev Foundry resource
 
 ## Open questions
 
 - Azure hosting flavor for PostgreSQL: Flexible Server (stoppable, not auto-pause) vs Postgres-in-a-container for throwaway demo envs
 - Direct P2P connection upgrade (Parsec-style) as a later optimization vs relay-only
-- AI assistant model family: Claude (official `Anthropic.Foundry` .NET SDK) vs Azure OpenAI GPT — same Foundry resource and tool-calling pattern either way; decide when the feature is scheduled
+- Identity for user accounts: self-managed email+password (ASP.NET Core Identity) vs social logins (Google/Apple — Apple sign-in becomes mandatory on iOS if any social login is offered) vs outsourced IdP; also feeds the OAuth consent flow
+- Which LLMs earn a slot in the curated model picker at launch (tool-calling quality varies widely across the Foundry catalog); per-model SDK: Claude via the official `Anthropic.Foundry` .NET SDK, others via the OpenAI-compatible surface
+- Does the WebClient chat pane reach the Agent via the Server (single public origin, unified auth) or directly against the Agent's Foundry endpoint
 
 ## Diagrams
 
@@ -132,15 +144,17 @@ flowchart TB
   user(["👤 User"])
 
   subgraph devices["User's devices"]
-    web["WebClient<br/>React<br/><i>dual-pane UI, runs in the browser</i>"]
+    web["WebClient<br/>React<br/><i>dual-pane UI + AI chat pane<br/>(curated model picker)</i>"]
     mobile["MobileClient<br/>React Native<br/><i>iPhone + Android</i>"]
+    mcpclients["Third-party MCP clients<br/><i>Claude Code, Claude Desktop, ChatGPT, …<br/>user's own AI subscription</i>"]
   end
 
   subgraph azure["Azure — one stamp per environment (prod, qa, demo-*)"]
-    cloud["Server<br/>.NET 10, ASP.NET Core + SignalR<br/><i>accounts, Daemon registry, relay<br/>(correlation-ID multiplexed);<br/>stateless w.r.t. file data</i>"]
-    db[("PostgreSQL<br/><i>coordination metadata only:<br/>users, Daemon regs (public keys),<br/>sessions, pairing codes.<br/>Never file data</i>")]
+    cloud["Server<br/>.NET 10, ASP.NET Core + SignalR<br/><i>accounts, Daemon registry, relay<br/>(correlation-ID multiplexed),<br/>MCP endpoint + OAuth 2.1/PATs;<br/>stateless w.r.t. file data</i>"]
+    agent["Agent<br/>.NET 10 container, Foundry Agent Service<br/><i>agent loop: chat sessions,<br/>confirmation gates, usage limits</i>"]
+    models["Foundry Models<br/><i>serverless LLM inference —<br/>one endpoint, many models,<br/>pay-per-token</i>"]
+    db[("PostgreSQL<br/><i>coordination metadata only:<br/>users, Daemon regs (public keys),<br/>sessions (incl. PATs/OAuth grants),<br/>pairing codes. Never file data</i>")]
     swa["Static Web Apps<br/><i>hosts + serves WebClient's<br/>static bundle</i>"]
-    foundry["Microsoft Foundry<br/><i>hosts the LLM for the<br/>AI file-management assistant<br/>(serverless, pay-per-token)</i>"]
   end
 
   subgraph machines["User's machines — × N: laptop, PC, home server, container"]
@@ -149,15 +163,19 @@ flowchart TB
 
   user --> web
   user --> mobile
-  web -->|"REST/HTTPS (JWT): file ops, auth<br/>WebSocket: live updates, progress"| cloud
-  mobile -->|"REST/HTTPS (JWT): file ops, auth<br/>WebSocket: live updates, progress"| cloud
+  user --> mcpclients
+  web -->|"REST/HTTPS (JWT): file ops, auth, AI chat<br/>WebSocket: live updates, progress"| cloud
+  mobile -->|"REST/HTTPS (JWT): file ops, auth, AI chat<br/>WebSocket: live updates, progress"| cloud
+  mcpclients -->|"MCP over Streamable HTTP<br/>(OAuth 2.1 consent flow or PAT)"| cloud
+  cloud -->|"chat sessions<br/>(routing: open question)"| agent
+  agent <-->|"Messages API + tool calling<br/>(model = request parameter)"| models
+  agent -->|"MCP tools/call<br/>(user-scoped token)"| cloud
   daemon -->|"persistent outbound WebSocket (SignalR, 443)<br/>dials OUT and holds open;<br/>Server pushes requests back down it"| cloud
   cloud -->|"EF Core"| db
-  cloud -.->|"Messages API + tool calling<br/>(AI assistant agent loop)"| foundry
   swa -.->|"delivers JS bundle on page load"| web
 ```
 
-Key point: **every connection is initiated toward the cloud** — nothing ever connects *to* a Daemon or client, which is why no NAT/firewall/port-forwarding setup is needed anywhere.
+Key point: **every connection is initiated toward the cloud** — nothing ever connects *to* a Daemon or client, which is why no NAT/firewall/port-forwarding setup is needed anywhere. The same funnel applies to AI: the Agent and third-party MCP clients reach files only through the Server's MCP endpoint — one tool surface, one authorization path, no exceptions.
 
 ### Relay flow — "list a directory"
 
@@ -201,23 +219,31 @@ sequenceDiagram
   autonumber
   participant C as WebClient / MobileClient
   participant S as Server
-  participant F as Microsoft Foundry (LLM)
+  participant G as Agent (Foundry Agent Service)
+  participant F as Foundry Models (LLM)
   participant A as Daemon #42
-  C->>S: HTTPS: "organize ~/Downloads by file type" on Daemon #42 (JWT)
-  S->>F: Messages API: instruction + file-op tool definitions
-  F-->>S: tool_use: list_dir(~/Downloads)
-  S->>A: relay op over the open socket (sandbox check applies as usual)
+  C->>S: chat: "organize ~/Downloads by file type" on Daemon #42 (JWT, chosen model)
+  S->>G: start/continue chat session (user-scoped token minted for the Agent)
+  G->>F: Messages API: instruction + tool definitions (from MCP tools/list)
+  F-->>G: tool_use: list_dir(~/Downloads)
+  G->>S: MCP tools/call list_dir (bearer: user-scoped token)
+  S->>A: relay op over the open socket (authorization + sandbox as usual)
   A-->>S: directory entries
-  S->>F: tool_result: entries
-  F-->>S: plan text + tool_use: create_dir / move × N
-  S->>C: preview plan via SignalR and wait for confirmation
+  S-->>G: MCP result
+  G->>F: tool_result: entries
+  F-->>G: plan text + tool_use: create_dir / move × N
+  G-->>C: plan preview, wait for user confirmation (via Server/SignalR)
   C->>S: user confirms
+  S-->>G: confirmation
+  G->>S: MCP tools/call × N
   S->>A: execute ops via relay
-  S->>F: tool_results
-  F-->>S: summary text (no more tool calls)
-  S->>C: done + summary
-  Note over S,F: The LLM's tools ARE the existing relay ops — the Daemon is unchanged<br/>and its path sandboxing bounds the AI like any other client
+  G->>F: tool_results
+  F-->>G: summary text (no more tool calls)
+  G-->>C: done + summary (via Server/SignalR)
+  Note over G,S: The Agent is just another MCP client — same endpoint, same user-scoped auth,<br/>same Daemon sandbox as a user's Claude Code. No privileged path exists.
 ```
+
+Third-party flow (Claude Code etc.) is the same picture minus G and F: the MCP client calls the Server's MCP endpoint directly with its OAuth/PAT token, and the user's own LLM plays F's role on their side.
 
 ### Provisioning & deployment — how `infra/`, Terraform, and Azure fit together
 
@@ -227,12 +253,12 @@ flowchart TB
 
   subgraph repo["Git repo"]
     tf["infra/ — Terraform files<br/><i>declare WHAT should exist in Azure<br/>(desired state, versioned like code)</i>"]
-    src["Product source code<br/><i>Server, WebClient</i>"]
+    src["Product source code<br/><i>Server, WebClient, Agent</i>"]
   end
 
   subgraph up["azd up — two phases"]
     prov["1 · Provision (terraform apply)<br/><i>diff desired state vs recorded state,<br/>create/update only the difference — idempotent</i>"]
-    dep["2 · Deploy<br/><i>docker build Server → push image;<br/>build WebClient bundle → upload</i>"]
+    dep["2 · Deploy<br/><i>docker build Server + Agent → push images;<br/>build WebClient bundle → upload</i>"]
   end
 
   state[("Terraform state<br/>Azure Storage account<br/><i>record of what Terraform<br/>already created per environment</i>")]
@@ -243,7 +269,8 @@ flowchart TB
       aca["Container Apps<br/><i>pulls + runs Server image</i>"]
       pg[("PostgreSQL<br/><i>schema self-initializes<br/>via EF Core migrations</i>")]
       swa["Static Web Apps<br/><i>serves WebClient bundle</i>"]
-      foundry["Microsoft Foundry<br/><i>LLM endpoint for the<br/>AI assistant</i>"]
+      models["Foundry Models<br/><i>serverless LLM endpoint</i>"]
+      agentsvc["Foundry Agent Service<br/><i>pulls + runs Agent container</i>"]
     end
     rg2["angstrom-test, angstrom-demo-featX …<br/><i>identical stamps from the same .tf files,<br/>azd down deletes a whole stamp</i>"]
   end
@@ -254,8 +281,9 @@ flowchart TB
   prov <-->|"read + update"| state
   prov -->|"Azure API calls"| rg
   prov -.-> rg2
-  dep -->|"push Server image"| acr
+  dep -->|"push Server + Agent images"| acr
   acr -->|"pull on release"| aca
+  acr -->|"pull on release"| agentsvc
   dep -->|"upload bundle"| swa
 ```
 
