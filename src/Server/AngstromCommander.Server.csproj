@@ -8,4 +8,8 @@
     <InternalsVisibleTo Include="AngstromCommander.Server.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Protocol\AngstromCommander.Protocol.csproj" />
+  </ItemGroup>
+
 </Project>

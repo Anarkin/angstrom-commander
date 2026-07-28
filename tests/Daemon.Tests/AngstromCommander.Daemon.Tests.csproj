@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Daemon\AngstromCommander.Daemon.csproj" />
+    <ProjectReference Include="..\..\src\Protocol\AngstromCommander.Protocol.csproj" />
   </ItemGroup>
 
 </Project>
