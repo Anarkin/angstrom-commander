@@ -84,6 +84,7 @@ Diagrams: see the Diagrams section at the bottom.
 - Loop: the **Agent** (container on Foundry Agent Service) runs the tool-calling loop — model emits tool calls, the Agent executes them **as an MCP client of the Server's MCP endpoint** with a user-scoped token, feeds results back until the model finishes. The Agent is architecturally just another client: no privileged path, Daemon unchanged
 - Safety: Daemon path sandboxing bounds the AI exactly like any client; destructive/mutating ops require user confirmation in the client before execution; no delete tool in v1; built-in usage burns our Azure tokens → per-user usage limits ship with the feature, not after
 - Build order inside v1 (each step ships on its own, none is rework): core file manager → MCP endpoint with PATs (third-party agents work from here) → OAuth + consent → Agent + model picker
+- Chat routing: WebClient/MobileClient never talk to the Agent directly — chat goes to the Server (existing JWT auth, single public origin), which forwards the session to the Agent and streams responses/confirmations back over the client's already-open SignalR connection. The Agent's endpoint is never publicly exposed
 - Fallback: the Agent is a plain container speaking MCP — if Foundry Agent Service disappoints (GA'd mid-2026), it runs on Container Apps instead with an infra-only change
 
 ## Security model
@@ -133,7 +134,6 @@ See the "Provisioning & deployment" diagram at the bottom for how the pieces fit
 - When the direct P2P connection upgrade ships — not whether (see § Scaling: relay egress cost makes it an economic requirement at scale, though not for v1)
 - Identity for user accounts: self-managed email+password (ASP.NET Core Identity) vs social logins (Google/Apple — Apple sign-in becomes mandatory on iOS if any social login is offered) vs outsourced IdP; also feeds the OAuth consent flow
 - Which LLMs earn a slot in the curated model picker at launch (tool-calling quality varies widely across the Foundry catalog); per-model SDK: Claude via the official `Anthropic.Foundry` .NET SDK, others via the OpenAI-compatible surface
-- Does the WebClient chat pane reach the Agent via the Server (single public origin, unified auth) or directly against the Agent's Foundry endpoint
 ## Diagrams
 
 ### Containers
@@ -166,7 +166,7 @@ flowchart TB
   web -->|"REST/HTTPS (JWT): file ops, auth, AI chat<br/>WebSocket: live updates, progress"| server
   mobile -->|"REST/HTTPS (JWT): file ops, auth, AI chat<br/>WebSocket: live updates, progress"| server
   mcpclients -->|"MCP over Streamable HTTP<br/>(OAuth 2.1 consent flow or PAT)"| server
-  server -->|"chat sessions<br/>(routing: open question)"| agent
+  server -->|"chat sessions<br/>(forwarded, single public origin)"| agent
   agent <-->|"Messages API + tool calling<br/>(model = request parameter)"| models
   agent -->|"MCP tools/call<br/>(user-scoped token)"| server
   daemon -->|"persistent outbound WebSocket (SignalR, 443)<br/>dials OUT and holds open;<br/>Server pushes requests back down it"| server
