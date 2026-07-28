@@ -1,4 +1,4 @@
-# Angstrom
+# Angstrom Commander
 
 All your machines, an ångström apart — a cloud-based dual-pane file manager with a Parsec-like model: a Daemon on each of your machines, one account managing them all from web or mobile, AI-operable from day one.
 

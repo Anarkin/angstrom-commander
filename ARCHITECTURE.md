@@ -1,4 +1,4 @@
-# Angstrom — architecture
+# Angstrom Commander — architecture
 
 The what and why of the system: domain, components, tech stack, guardrails, security model, hosting, CI/CD, and diagrams. Working conventions live in [AGENTS.md](AGENTS.md); setup in [README.md](README.md).
 
@@ -65,7 +65,7 @@ Diagrams: see the Diagrams section at the bottom.
   - File transfers stream through in chunks (never buffered whole); bulk transfers may get a second dedicated connection later
 - MCP endpoint — the file-op tool surface exposed as a remote MCP server (Streamable HTTP, e.g. `api.<domain>.com/mcp`):
   - Same authorized, relayed, sandboxed ops as the REST API — MCP is a protocol adapter over one tool surface, never a second implementation
-  - Auth: OAuth 2.1 (authorization code + PKCE, dynamic client registration; OpenIddict) with Angstrom login + consent pages; personal access tokens as the simpler first step. Both land in the sessions table → visible and revocable on the "active sessions" page like any device
+  - Auth: OAuth 2.1 (authorization code + PKCE, dynamic client registration; OpenIddict) with Angstrom Commander login + consent pages; personal access tokens as the simpler first step. Both land in the sessions table → visible and revocable on the "active sessions" page like any device
   - Consequence: any MCP client (Claude Code, Claude Desktop, ChatGPT, …) can operate the user's machines using the user's own AI subscription — third-party agents get no special access path
 - DB stores coordination metadata only:
   - Daemon registrations: display name, Daemon public key, platform/OS/version, created / last_seen / revoked timestamps
@@ -106,7 +106,7 @@ See the "Provisioning & deployment" diagram at the bottom for how the pieces fit
 
 ## Source control & CI/CD
 
-- GitHub hosts the repo: <https://github.com/Anarkin/Angstrom> (private, personal account — free tier is ample for solo, incl. 2,000 Actions minutes/month)
+- GitHub hosts the repo: <https://github.com/Anarkin/angstrom-commander> (private, personal account — free tier is ample for solo, incl. 2,000 Actions minutes/month)
 - CI/CD: GitHub Actions; `azd pipeline config` bootstraps the workflow + OIDC federated identity to Azure (no cloud secrets stored in GitHub)
 - Every PR runs the full guardrail suite: build (warnings = errors), tests, `dotnet format`, ESLint/Prettier, `terraform fmt`/`validate`
 - Later: PR-open spawns a demo env (`azd up` for `demo-prN`), PR-close tears it down
@@ -255,14 +255,14 @@ flowchart TB
 
   subgraph azure["Azure subscription"]
     acr["Container Registry<br/><i>shared — stores Server + Agent images</i>"]
-    subgraph rg["Resource group angstrom-qa — ONE STAMP PER ENVIRONMENT"]
+    subgraph rg["Resource group angstrom-commander-qa — ONE STAMP PER ENVIRONMENT"]
       aca["Container Apps<br/><i>pulls + runs Server image</i>"]
       pg[("PostgreSQL<br/><i>schema self-initializes<br/>via EF Core migrations</i>")]
       swa["Static Web Apps<br/><i>serves WebClient bundle</i>"]
       models["Foundry Models<br/><i>serverless LLM endpoint</i>"]
       agentsvc["Foundry Agent Service<br/><i>pulls + runs Agent container</i>"]
     end
-    rg2["angstrom-test, angstrom-demo-featX …<br/><i>identical stamps from the same .tf files,<br/>azd down deletes a whole stamp</i>"]
+    rg2["angstrom-commander-test, angstrom-commander-demo-featX …<br/><i>identical stamps from the same .tf files,<br/>azd down deletes a whole stamp</i>"]
   end
 
   dev --> up
