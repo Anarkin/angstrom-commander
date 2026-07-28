@@ -71,6 +71,10 @@ Diagrams: see the Diagrams section at the bottom.
   - Correlation IDs multiplex many concurrent operations over the one socket
   - Works through NAT/firewalls because an established TCP connection is bidirectional regardless of who initiated it
   - File transfers stream through in chunks (never buffered whole); bulk transfers may get a second dedicated connection later
+- MCP endpoint — the file-op tool surface exposed as a remote MCP server (Streamable HTTP, e.g. `api.<domain>.com/mcp`):
+  - Same authorized, relayed, sandboxed ops as the REST API — MCP is a protocol adapter over one tool surface, never a second implementation
+  - Auth: OAuth 2.1 (authorization code + PKCE, dynamic client registration; OpenIddict) with Angstrom login + consent pages; personal access tokens as the simpler first step. Both land in the sessions table → visible and revocable on the "active sessions" page like any device
+  - Consequence: any MCP client (Claude Code, Claude Desktop, ChatGPT, …) can operate the user's machines using the user's own AI subscription — third-party agents get no special access path
 - DB stores coordination metadata only:
   - Daemon registrations: display name, Daemon public key, platform/OS/version, created / last_seen / revoked timestamps
   - Sessions (WebClient/MobileClient logins): hashed refresh token, device info, timestamps + revocation (enables an "active sessions" page)
@@ -81,12 +85,7 @@ Diagrams: see the Diagrams section at the bottom.
 **WebClient & MobileClient**
 - Configurable server URL (build config in WebClient, build flavor/hidden setting in MobileClient) so any build can target any environment
 
-**MCP endpoint (part of Server)**
-- The Server exposes the file-op tool surface as a remote MCP server (Streamable HTTP, e.g. `api.<domain>.com/mcp`): the same authorized, relayed, sandboxed ops as the REST API — MCP is a protocol adapter over one tool surface, never a second implementation
-- Auth: OAuth 2.1 (authorization code + PKCE, dynamic client registration; OpenIddict) with Angstrom login + consent pages; personal access tokens as the simpler first step. Both land in the sessions table → visible and revocable on the "active sessions" page like any device
-- Consequence: any MCP client (Claude Code, Claude Desktop, ChatGPT, …) can operate the user's machines using the user's own AI subscription — third-party agents get no special access path
-
-**AI file-management assistant (Agent)**
+**Agent**
 - Feature: user asks in natural language ("organize my Downloads by file type") in the WebClient/MobileClient chat pane and an LLM performs the file operations; a curated model picker chooses the LLM
 - LLM: **Foundry Models** (Azure's model-as-a-service) — serverless pay-per-token inference, one endpoint fronting many models (Claude, GPT, …), so the model is a request parameter; resource lives in the environment's stamp
 - Loop: the **Agent** (container on Foundry Agent Service) runs the tool-calling loop — model emits tool calls, the Agent executes them **as an MCP client of the Server's MCP endpoint** with a user-scoped token, feeds results back until the model finishes. The Agent is architecturally just another client: no privileged path, Daemon unchanged
