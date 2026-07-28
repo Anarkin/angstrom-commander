@@ -79,7 +79,7 @@ Diagrams: see the Diagrams section at the bottom.
 **WebClient & MobileClient**
 - Configurable server URL (build config in WebClient, build flavor/hidden setting in MobileClient) so any build can target any environment
 
-**Planned: AI file-management assistant** (not scheduled yet; direction decided)
+**AI file-management assistant**
 - Feature: user asks in natural language ("organize my Downloads by file type") and an LLM performs the file operations
 - Hosting: **Microsoft Foundry** (Azure's model-as-a-service, formerly Azure AI Foundry) — serverless pay-per-token inference, resource lives in the environment's stamp (Terraform), Entra ID/API-key auth, billed through the Azure subscription
 - Mechanism: agent loop in the **Server** — the LLM's tools are the existing relayed Daemon file ops (list/stat/move/rename/mkdir); Server executes each tool call over the Daemon's outbound WebSocket and feeds results back until the model finishes. No new component; Daemon unchanged
@@ -139,7 +139,7 @@ flowchart TB
     cloud["Server<br/>.NET 10, ASP.NET Core + SignalR<br/><i>accounts, Daemon registry, relay<br/>(correlation-ID multiplexed);<br/>stateless w.r.t. file data</i>"]
     db[("PostgreSQL<br/><i>coordination metadata only:<br/>users, Daemon regs (public keys),<br/>sessions, pairing codes.<br/>Never file data</i>")]
     swa["Static Web Apps<br/><i>hosts + serves WebClient's<br/>static bundle</i>"]
-    foundry["Microsoft Foundry<br/><i>PLANNED — hosts the LLM for the<br/>AI file-management assistant<br/>(serverless, pay-per-token)</i>"]
+    foundry["Microsoft Foundry<br/><i>hosts the LLM for the<br/>AI file-management assistant<br/>(serverless, pay-per-token)</i>"]
   end
 
   subgraph machines["User's machines — × N: laptop, PC, home server, container"]
@@ -152,7 +152,7 @@ flowchart TB
   mobile -->|"REST/HTTPS (JWT): file ops, auth<br/>WebSocket: live updates, progress"| cloud
   daemon -->|"persistent outbound WebSocket (SignalR, 443)<br/>dials OUT and holds open;<br/>Server pushes requests back down it"| cloud
   cloud -->|"EF Core"| db
-  cloud -.->|"PLANNED: Messages API + tool calling<br/>(AI assistant agent loop)"| foundry
+  cloud -.->|"Messages API + tool calling<br/>(AI assistant agent loop)"| foundry
   swa -.->|"delivers JS bundle on page load"| web
 ```
 
@@ -193,7 +193,7 @@ sequenceDiagram
   S-->>A: Enrolled — future connects authenticate by signing a challenge with the private key
 ```
 
-### AI assistant flow — "organize this folder" (PLANNED)
+### AI assistant flow — "organize this folder"
 
 ```mermaid
 sequenceDiagram
