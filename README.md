@@ -7,10 +7,16 @@ All your machines, an ångström apart — a cloud-based dual-pane file manager 
 
 ## Setup
 
-Prerequisite: [.NET 10 SDK](https://dotnet.microsoft.com/download) (exact version pinned in `global.json`).
+Prerequisite: Docker (dev machines typically run Rancher Desktop).
 
 ```sh
-dotnet test
+docker compose up --build
 ```
 
-builds the Server and Daemon and runs their test suites — that's everything runnable so far. Per the plan, setup will eventually center on a single `docker compose up` that brings up the Server (+ its PostgreSQL), the WebClient, and the Agent; see ARCHITECTURE.md § Dev environment.
+brings up the Server on <http://localhost:5080> and a Daemon that dials out to it, exposing the repo directory read-only as `/data`. Exercise the relay:
+
+```sh
+curl "http://localhost:5080/api/daemons/compose-daemon/list?path=/data"
+```
+
+For working on the code, the [.NET 10 SDK](https://dotnet.microsoft.com/download) (exact version pinned in `global.json`) is enough: `dotnet test` builds everything and runs the test suites. PostgreSQL, the WebClient, and the Agent join the compose setup as they come to exist; see ARCHITECTURE.md § Dev environment.

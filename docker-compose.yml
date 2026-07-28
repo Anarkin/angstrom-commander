@@ -1,0 +1,21 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: src/Server/Dockerfile
+    ports:
+      - "5080:8080"
+
+  daemon:
+    build:
+      context: .
+      dockerfile: src/Daemon/Dockerfile
+    environment:
+      Relay__ServerUrl: "http://server:8080"
+      Relay__DaemonId: "compose-daemon"
+      Relay__AllowedRoots__0: "/data"
+    volumes:
+      # Sample sandboxed directory: the repo itself, read-only.
+      - ./:/data:ro
+    depends_on:
+      - server
