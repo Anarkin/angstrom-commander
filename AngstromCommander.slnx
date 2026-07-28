@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/" />
+  <Folder Name="/src/Daemon/">
+    <Project Path="src/Daemon/AngstromCommander.Daemon.csproj" />
+  </Folder>
+  <Folder Name="/src/Server/">
+    <Project Path="src/Server/AngstromCommander.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/" />
+  <Folder Name="/tests/Daemon.Tests/">
+    <Project Path="tests/Daemon.Tests/AngstromCommander.Daemon.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tests/Server.Tests/">
+    <Project Path="tests/Server.Tests/AngstromCommander.Server.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -7,4 +7,10 @@ All your machines, an ångström apart — a cloud-based dual-pane file manager 
 
 ## Setup
 
-Not written yet — there is no runnable code in the repo so far. Per the plan, it will center on a single `docker compose up` that brings up the Server (+ its PostgreSQL), the WebClient, and the Agent; see ARCHITECTURE.md § Dev environment.
+Prerequisite: [.NET 10 SDK](https://dotnet.microsoft.com/download) (exact version pinned in `global.json`).
+
+```sh
+dotnet test
+```
+
+builds the Server and Daemon and runs their test suites — that's everything runnable so far. Per the plan, setup will eventually center on a single `docker compose up` that brings up the Server (+ its PostgreSQL), the WebClient, and the Agent; see ARCHITECTURE.md § Dev environment.

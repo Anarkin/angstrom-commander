@@ -396,3 +396,7 @@ dotnet_naming_style.s_camelcase.capitalization = camel_case
 [**/Migrations/*.cs]
 generated_code = true
 
+# xUnit only discovers public test classes, which trips CA1515 ("make application types internal").
+[tests/**.cs]
+dotnet_diagnostic.CA1515.severity = none
+
