@@ -139,6 +139,7 @@ flowchart TB
     cloud["Server<br/>.NET 10, ASP.NET Core + SignalR<br/><i>accounts, Daemon registry, relay<br/>(correlation-ID multiplexed);<br/>stateless w.r.t. file data</i>"]
     db[("PostgreSQL<br/><i>coordination metadata only:<br/>users, Daemon regs (public keys),<br/>sessions, pairing codes.<br/>Never file data</i>")]
     swa["Static Web Apps<br/><i>hosts + serves WebClient's<br/>static bundle</i>"]
+    foundry["Microsoft Foundry<br/><i>PLANNED — hosts the LLM for the<br/>AI file-management assistant<br/>(serverless, pay-per-token)</i>"]
   end
 
   subgraph machines["User's machines — × N: laptop, PC, home server, container"]
@@ -151,6 +152,7 @@ flowchart TB
   mobile -->|"REST/HTTPS (JWT): file ops, auth<br/>WebSocket: live updates, progress"| cloud
   daemon -->|"persistent outbound WebSocket (SignalR, 443)<br/>dials OUT and holds open;<br/>Server pushes requests back down it"| cloud
   cloud -->|"EF Core"| db
+  cloud -.->|"PLANNED: Messages API + tool calling<br/>(AI assistant agent loop)"| foundry
   swa -.->|"delivers JS bundle on page load"| web
 ```
 
@@ -189,6 +191,31 @@ sequenceDiagram
   C->>S: User enters code
   S->>S: Bind registration: this Daemon → this account
   S-->>A: Enrolled — future connects authenticate by signing a challenge with the private key
+```
+
+### AI assistant flow — "organize this folder" (PLANNED)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as WebClient / MobileClient
+  participant S as Server
+  participant F as Microsoft Foundry (LLM)
+  participant A as Daemon #42
+  C->>S: HTTPS: "organize ~/Downloads by file type" on Daemon #42 (JWT)
+  S->>F: Messages API: instruction + file-op tool definitions
+  F-->>S: tool_use: list_dir(~/Downloads)
+  S->>A: relay op over the open socket (sandbox check applies as usual)
+  A-->>S: directory entries
+  S->>F: tool_result: entries
+  F-->>S: plan text + tool_use: create_dir / move × N
+  S->>C: preview plan via SignalR and wait for confirmation
+  C->>S: user confirms
+  S->>A: execute ops via relay
+  S->>F: tool_results
+  F-->>S: summary text (no more tool calls)
+  S->>C: done + summary
+  Note over S,F: The LLM's tools ARE the existing relay ops — the Daemon is unchanged<br/>and its path sandboxing bounds the AI like any other client
 ```
 
 ### Provisioning & deployment — how `infra/`, Terraform, and Azure fit together
