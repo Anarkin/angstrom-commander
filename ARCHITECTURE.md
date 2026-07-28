@@ -242,7 +242,7 @@ sequenceDiagram
   Note over G,S: The Agent is just another MCP client — same endpoint, same user-scoped auth,<br/>same Daemon sandbox as a user's Claude Code. No privileged path exists.
 ```
 
-Third-party flow (Claude Code etc.) is the same picture minus G and F: the MCP client calls the Server's MCP endpoint directly with its OAuth/PAT token, and the user's own LLM plays F's role on their side.
+Third-party flow (Claude Code etc.) is the same picture minus the Agent and Foundry Models: the MCP client calls the Server's MCP endpoint directly with its OAuth/PAT token, and the user's own LLM fills the Foundry Models role on their side.
 
 ### Provisioning & deployment — how `infra/`, Terraform, and Azure fit together
 
