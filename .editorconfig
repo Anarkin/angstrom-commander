@@ -396,6 +396,11 @@ dotnet_naming_style.s_camelcase.capitalization = camel_case
 [**/Migrations/*.cs]
 generated_code = true
 
+# CA2007 (ConfigureAwait) is guidance for libraries whose callers may have a SynchronizationContext;
+# ASP.NET Core apps have none, so the qualifier would be noise on every await.
+[*.cs]
+dotnet_diagnostic.CA2007.severity = none
+
 # xUnit only discovers public test classes, which trips CA1515 ("make application types internal").
 [tests/**.cs]
 dotnet_diagnostic.CA1515.severity = none

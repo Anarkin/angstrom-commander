@@ -1,7 +1,15 @@
+using AngstromCommander.Server.Relay;
+
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddSignalR();
+builder.Services.AddSingleton<IDaemonConnectionRegistry, InMemoryDaemonConnectionRegistry>();
+
 var app = builder.Build();
 
 app.MapGet("/healthz", () => "ok");
+app.MapHub<DaemonHub>("/hub/daemon");
+app.MapRelayEndpoints();
 
 app.Run();
 

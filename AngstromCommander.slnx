@@ -3,6 +3,9 @@
   <Folder Name="/src/Daemon/">
     <Project Path="src/Daemon/AngstromCommander.Daemon.csproj" />
   </Folder>
+  <Folder Name="/src/Protocol/">
+    <Project Path="src/Protocol/AngstromCommander.Protocol.csproj" />
+  </Folder>
   <Folder Name="/src/Server/">
     <Project Path="src/Server/AngstromCommander.Server.csproj" />
   </Folder>
