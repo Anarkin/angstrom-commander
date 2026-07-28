@@ -1,6 +1,6 @@
 # Angstrom Commander — architecture
 
-The what and why of the system: domain, components, tech stack, guardrails, security model, hosting, CI/CD, and diagrams. Working conventions live in [AGENTS.md](AGENTS.md); setup in [README.md](README.md).
+The what and why of the system: domain, components, tech stack, guardrails, security model, scaling, hosting, CI/CD, and diagrams. Working conventions live in [AGENTS.md](AGENTS.md); setup in [README.md](README.md).
 
 ## Domain
 
@@ -62,6 +62,7 @@ Diagrams: see the Diagrams section at the bottom.
   - Each Daemon holds one persistent outbound WebSocket (SignalR, port 443) open to the Server; the Server routes client requests down it and matches responses back
   - Correlation IDs multiplex many concurrent operations over the one socket
   - Works through NAT/firewalls because an established TCP connection is bidirectional regardless of who initiated it
+  - Socket ownership is the Server's only per-replica state: with multiple replicas, a connection registry (Daemon → owning replica, in Redis) routes each request directly to the replica holding that Daemon's socket — NOT SignalR's Redis backplane, which broadcasts every message to every replica and collapses under this pattern. v1 runs one replica with an in-process map, but socket lookup sits behind an interface from the first commit so the registry is a swap, not surgery
   - File transfers stream through in chunks (never buffered whole); bulk transfers may get a second dedicated connection later
 - MCP endpoint — the file-op tool surface exposed as a remote MCP server (Streamable HTTP, e.g. `api.<domain>.com/mcp`):
   - Same authorized, relayed, sandboxed ops as the REST API — MCP is a protocol adapter over one tool surface, never a second implementation
@@ -93,6 +94,15 @@ Diagrams: see the Diagrams section at the bottom.
 - Path sandboxing in the Daemon: canonicalize all client-supplied paths, enforce allowed roots (no traversal)
 - AI access: the Agent and third-party MCP clients act only through the Server's MCP endpoint with user-scoped tokens (OAuth 2.1 or PATs) — same authorization and Daemon sandbox as any client, no extra access path; mutating ops additionally require explicit user confirmation; every AI session is listed and revocable on the "active sessions" page
 
+## Scaling
+
+Sanity check against a large user base (hundreds of thousands of users → millions of enrolled Daemons, each holding an idle persistent WebSocket). The architecture's shape holds — the outbound-connection relay is the same pattern Parsec, TeamViewer, and ngrok run at larger scale — with two known pressure points, both planned for rather than redesigned around:
+
+- **Connection routing** (the real bottleneck): no single Server instance holds a million sockets, so the Server becomes N replicas and requests must reach the replica owning the target Daemon's socket. Solved by the connection registry (see § Architecture — Server); it is designed into the relay from the first commit because retrofitting it later is surgery.
+- **Relay bandwidth** (the real cost): every file transfer streams through Azure, so egress spend grows with users' copy habits — this is exactly why Parsec is P2P. The direct P2P upgrade (Parsec-style, brokered by the Server, relay as fallback) is not needed for v1 but becomes an economic requirement well before this scale.
+
+What already scales without change: PostgreSQL stores coordination metadata only, so 500k users is a small database; the Server is stateless w.r.t. file data and streams in chunks, so replicas scale horizontally; Agent/LLM cost is pay-per-token with per-user usage limits — linear, no cliff. Smaller shifts at that scale, none structural: scale-to-zero stops mattering, Container Apps may yield to AKS if connection density demands it, and multi-region is more stamps from the same Terraform.
+
 ## Hosting & infrastructure
 
 See the "Provisioning & deployment" diagram at the bottom for how the pieces fit together.
@@ -120,11 +130,10 @@ See the "Provisioning & deployment" diagram at the bottom for how the pieces fit
 ## Open questions
 
 - Azure hosting flavor for PostgreSQL: Flexible Server (stoppable, not auto-pause) vs Postgres-in-a-container for throwaway demo envs
-- Direct P2P connection upgrade (Parsec-style) as a later optimization vs relay-only
+- When the direct P2P connection upgrade ships — not whether (see § Scaling: relay egress cost makes it an economic requirement at scale, though not for v1)
 - Identity for user accounts: self-managed email+password (ASP.NET Core Identity) vs social logins (Google/Apple — Apple sign-in becomes mandatory on iOS if any social login is offered) vs outsourced IdP; also feeds the OAuth consent flow
 - Which LLMs earn a slot in the curated model picker at launch (tool-calling quality varies widely across the Foundry catalog); per-model SDK: Claude via the official `Anthropic.Foundry` .NET SDK, others via the OpenAI-compatible surface
 - Does the WebClient chat pane reach the Agent via the Server (single public origin, unified auth) or directly against the Agent's Foundry endpoint
-
 ## Diagrams
 
 ### Containers
