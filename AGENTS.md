@@ -1,6 +1,6 @@
 # Agent instructions
 
-Angstrom Commander is a cloud-based dual-pane file manager; the full picture — domain, components, tech stack, guardrails, architecture, security model, hosting, CI/CD, diagrams — is in [ARCHITECTURE.md](ARCHITECTURE.md). Read it before design or implementation work. [README.md](README.md) is the landing page and will carry the setup guide.
+Angstrom Commander is a cloud-based dual-pane file manager; the full picture is in [ARCHITECTURE.md](ARCHITECTURE.md) — read it before design or implementation work. [README.md](README.md) is the landing page and will carry the setup guide.
 
 ## Conventions
 

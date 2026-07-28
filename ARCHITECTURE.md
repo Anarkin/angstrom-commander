@@ -14,10 +14,10 @@ The what and why of the system: domain, components, tech stack, guardrails, secu
 The five products we build and ship (infrastructure like the DB is listed with its owning component):
 
 1. **Daemon** — installed per machine; exposes that machine's file system over a secure channel. Runs on Windows, macOS, Linux, and inside Linux containers. User-installed, never cloud-hosted.
-2. **Server** — user accounts, Daemon registry, connection brokering/relay, and the MCP endpoint (the file-op tool surface for AI clients). Daemons dial OUT to it (persistent outbound connection), which is why no NAT/firewall config is needed. Backed by PostgreSQL (its only persistent store).
+2. **Server** — user accounts, Daemon registry, connection brokering/relay, and the MCP endpoint (the file-op tool surface for AI clients). Backed by PostgreSQL (its only persistent store).
 3. **WebClient** — dual-pane UI in the browser, incl. the AI chat pane.
 4. **MobileClient** — iPhone + Android.
-5. **Agent** — the built-in AI assistant's agent loop, a container hosted on Foundry Agent Service. Talks to LLMs via Foundry Models and to the Server as an MCP client; never talks to Daemons directly.
+5. **Agent** — the built-in AI assistant's agent loop. Cloud-hosted, never on the user's machines.
 
 Besides the products, the repo carries supporting codebases — authored and reviewed like code, but not shipped to anyone: `infra/` (Terraform + azd definitions of the Azure environments) and `.github/workflows/` (GitHub Actions CI/CD).
 
@@ -65,7 +65,7 @@ Diagrams: see the Diagrams section at the bottom.
   - File transfers stream through in chunks (never buffered whole); bulk transfers may get a second dedicated connection later
 - MCP endpoint — the file-op tool surface exposed as a remote MCP server (Streamable HTTP, e.g. `api.<domain>.com/mcp`):
   - Same authorized, relayed, sandboxed ops as the REST API — MCP is a protocol adapter over one tool surface, never a second implementation
-  - Auth: OAuth 2.1 (authorization code + PKCE, dynamic client registration; OpenIddict) with Angstrom Commander login + consent pages; personal access tokens as the simpler first step. Both land in the sessions table → visible and revocable on the "active sessions" page like any device
+  - Auth: OAuth 2.1 (authorization code + PKCE, dynamic client registration; OpenIddict) with Angstrom Commander login + consent pages; personal access tokens as the simpler first step. Both land in the sessions table (see the DB bullets below)
   - Consequence: any MCP client (Claude Code, Claude Desktop, ChatGPT, …) can operate the user's machines using the user's own AI subscription — third-party agents get no special access path
 - DB stores coordination metadata only:
   - Daemon registrations: display name, Daemon public key, platform/OS/version, created / last_seen / revoked timestamps
@@ -140,7 +140,7 @@ flowchart TB
   end
 
   subgraph azure["Azure — one stamp per environment (prod, qa, demo-*)"]
-    cloud["Server<br/>.NET 10, ASP.NET Core + SignalR<br/><i>accounts, Daemon registry, relay<br/>(correlation-ID multiplexed),<br/>MCP endpoint + OAuth 2.1/PATs;<br/>stateless w.r.t. file data</i>"]
+    server["Server<br/>.NET 10, ASP.NET Core + SignalR<br/><i>accounts, Daemon registry, relay<br/>(correlation-ID multiplexed),<br/>MCP endpoint + OAuth 2.1/PATs;<br/>stateless w.r.t. file data</i>"]
     agent["Agent<br/>.NET 10 container, Foundry Agent Service<br/><i>agent loop: chat sessions,<br/>confirmation gates, usage limits</i>"]
     models["Foundry Models<br/><i>serverless LLM inference —<br/>one endpoint, many models,<br/>pay-per-token</i>"]
     db[("PostgreSQL<br/><i>coordination metadata only:<br/>users, Daemon regs (public keys),<br/>sessions (incl. PATs/OAuth grants),<br/>pairing codes. Never file data</i>")]
@@ -154,14 +154,14 @@ flowchart TB
   user --> web
   user --> mobile
   user --> mcpclients
-  web -->|"REST/HTTPS (JWT): file ops, auth, AI chat<br/>WebSocket: live updates, progress"| cloud
-  mobile -->|"REST/HTTPS (JWT): file ops, auth, AI chat<br/>WebSocket: live updates, progress"| cloud
-  mcpclients -->|"MCP over Streamable HTTP<br/>(OAuth 2.1 consent flow or PAT)"| cloud
-  cloud -->|"chat sessions<br/>(routing: open question)"| agent
+  web -->|"REST/HTTPS (JWT): file ops, auth, AI chat<br/>WebSocket: live updates, progress"| server
+  mobile -->|"REST/HTTPS (JWT): file ops, auth, AI chat<br/>WebSocket: live updates, progress"| server
+  mcpclients -->|"MCP over Streamable HTTP<br/>(OAuth 2.1 consent flow or PAT)"| server
+  server -->|"chat sessions<br/>(routing: open question)"| agent
   agent <-->|"Messages API + tool calling<br/>(model = request parameter)"| models
-  agent -->|"MCP tools/call<br/>(user-scoped token)"| cloud
-  daemon -->|"persistent outbound WebSocket (SignalR, 443)<br/>dials OUT and holds open;<br/>Server pushes requests back down it"| cloud
-  cloud -->|"EF Core"| db
+  agent -->|"MCP tools/call<br/>(user-scoped token)"| server
+  daemon -->|"persistent outbound WebSocket (SignalR, 443)<br/>dials OUT and holds open;<br/>Server pushes requests back down it"| server
+  server -->|"EF Core"| db
   swa -.->|"delivers JS bundle on page load"| web
 ```
 
