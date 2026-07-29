@@ -4,7 +4,9 @@ import App from "./App";
 test("shows the product name", () => {
   render(<App />);
 
-  expect(screen.getByRole("heading", { name: /angstrom commander/i })).toBeInTheDocument();
+  expect(
+    screen.getByRole("heading", { name: /angstrom commander/i }),
+  ).toBeInTheDocument();
 });
 
 test("shows the configured server", () => {

@@ -10,8 +10,8 @@ full picture.
 | ---------------------- | ------------------------------------------------- |
 | `npm run dev`          | Dev server (talks to the Server from compose)     |
 | `npm test`             | Vitest + React Testing Library                    |
-| `npm run lint`         | oxlint, type-aware, warnings are errors           |
-| `npm run format`       | oxfmt (Prettier-conformant)                       |
+| `npm run lint`         | ESLint (type-checked rules), warnings are errors  |
+| `npm run format`       | Prettier                                          |
 | `npm run format:check` | The CI formatting gate                            |
 | `npm run build`        | Type-checks (`tsc -b`) and builds the prod bundle |
 
