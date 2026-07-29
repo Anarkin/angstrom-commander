@@ -1,0 +1,25 @@
+:root {
+  color-scheme: light dark;
+  font:
+    16px/1.5 system-ui,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+code {
+  font-family: ui-monospace, Consolas, monospace;
+  background: rgba(128, 128, 128, 0.15);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}

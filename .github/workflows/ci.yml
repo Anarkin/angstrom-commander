@@ -27,3 +27,33 @@ jobs:
 
       - name: Test with coverage
         run: dotnet test --configuration Release --no-build --collect:"XPlat Code Coverage"
+
+  webclient:
+    name: WebClient lint, format, test, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/WebClient
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/WebClient/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint (type-aware, warnings are errors)
+        run: npm run lint
+
+      - name: Verify formatting
+        run: npm run format:check
+
+      - name: Test with coverage
+        run: npm run test:coverage
+
+      - name: Build
+        run: npm run build
