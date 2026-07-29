@@ -18,6 +18,8 @@ services:
     ports:
       - "5080:8080"
     environment:
+      # The compose stack IS the dev environment (enables CORS for local dev pages).
+      ASPNETCORE_ENVIRONMENT: "Development"
       ConnectionStrings__Database: "Host=postgres;Port=5432;Database=angstrom;Username=angstrom;Password=angstrom"
     depends_on:
       postgres:

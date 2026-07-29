@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Angstrom Commander — API console</title>
+<style>
+  :root { color-scheme: light dark; --line: #8884; --accent: #4a7dff; --ok: #26a269; --bad: #c01c28; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.45 system-ui, sans-serif; margin: 0 auto; max-width: 980px; padding: 16px; }
+  h1 { font-size: 18px; margin: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; opacity: .7; margin: 0 0 10px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-top: 12px; }
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .card.wide { grid-column: 1 / -1; }
+  input, button { font: inherit; padding: 6px 10px; border-radius: 7px; border: 1px solid var(--line); background: transparent; color: inherit; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { text-align: left; padding: 5px 8px; border-top: 1px solid var(--line); }
+  th { border-top: none; font-size: 12px; opacity: .7; }
+  tr.click { cursor: pointer; }
+  tr.click:hover td { background: #8881; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--bad); vertical-align: baseline; }
+  .dot.on { background: var(--ok); }
+  .muted { opacity: .65; font-size: 12px; }
+  .status { font-size: 12px; margin-top: 8px; min-height: 1em; white-space: pre-wrap; }
+  .status.err { color: var(--bad); }
+  .status.ok { color: var(--ok); }
+  #log { font: 12px/1.5 ui-monospace, monospace; max-height: 180px; overflow-y: auto; white-space: pre-wrap; margin: 0; }
+  code { background: #8882; border-radius: 4px; padding: 1px 5px; }
+  #path { flex: 1; min-width: 200px; font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+
+<div class="row" style="justify-content: space-between">
+  <h1>Angstrom Commander — API console</h1>
+  <div class="row">
+    <input id="serverUrl" size="24" value="http://localhost:5080">
+    <span id="healthDot" class="dot" title="Server health"></span>
+  </div>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <h2>Account</h2>
+    <div class="row">
+      <input id="email" type="email" placeholder="email" value="you@example.com">
+      <input id="password" type="password" placeholder="password" value="Sup3rSecret!">
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="btnRegister">Register</button>
+      <button id="btnLogin" class="primary">Log in</button>
+      <button id="btnLogout">Log out</button>
+    </div>
+    <div id="authStatus" class="status"></div>
+  </div>
+
+  <div class="card">
+    <h2>Pair a machine</h2>
+    <p class="muted">Get the code from the Daemon's log: <code>docker compose logs daemon</code></p>
+    <div class="row">
+      <input id="pairCode" size="10" placeholder="PAIRING CODE" style="text-transform:uppercase; font-family:ui-monospace,monospace">
+      <input id="pairName" size="16" placeholder="display name" value="My Machine">
+      <button id="btnClaim" class="primary">Claim</button>
+    </div>
+    <div id="pairStatus" class="status"></div>
+  </div>
+
+  <div class="card wide">
+    <h2>My machines <button id="btnMachines" style="margin-left:6px">Refresh</button></h2>
+    <table id="machinesTable" hidden>
+      <thead><tr><th></th><th>Name</th><th>Platform</th><th>Last seen</th><th>Registration</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="machinesStatus" class="status"></div>
+  </div>
+
+  <div class="card wide">
+    <h2>Files — <span id="browseTitle" class="muted">pick a machine above</span></h2>
+    <div class="row">
+      <button id="btnUp" title="Up one level">&#8679; Up</button>
+      <input id="path" value="/data">
+      <button id="btnList" class="primary">List</button>
+    </div>
+    <table id="filesTable" hidden>
+      <thead><tr><th>Name</th><th>Size</th><th>Modified</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="filesStatus" class="status"></div>
+  </div>
+
+  <div class="card wide">
+    <h2>Log</h2>
+    <pre id="log"></pre>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let token = localStorage.getItem("ac-token") || "";
+let currentMachine = null;
+
+const setStatus = (id, text, cls) => { const el = $(id); el.textContent = text; el.className = "status " + (cls || ""); };
+const log = (line) => { $("log").textContent = `${new Date().toLocaleTimeString()}  ${line}\n` + $("log").textContent; };
+
+async function api(method, path, body) {
+  const url = $("serverUrl").value.replace(/\/$/, "") + path;
+  const headers = {};
+  if (body) headers["Content-Type"] = "application/json";
+  if (token) headers["Authorization"] = "Bearer " + token;
+  const response = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const text = await response.text();
+  log(`${method} ${path} → ${response.status}${text && response.status >= 400 ? " " + text : ""}`);
+  if (!response.ok) throw new Error(`HTTP ${response.status}${text ? ": " + text : ""}`);
+  return text ? JSON.parse(text) : null;
+}
+
+function reflectAuth() {
+  const email = localStorage.getItem("ac-email");
+  setStatus("authStatus", token ? `Logged in as ${email}` : "Not logged in", token ? "ok" : "");
+}
+
+async function health() {
+  try {
+    await fetch($("serverUrl").value.replace(/\/$/, "") + "/healthz");
+    $("healthDot").classList.add("on");
+  } catch { $("healthDot").classList.remove("on"); }
+}
+
+$("btnRegister").onclick = async () => {
+  try {
+    await api("POST", "/api/auth/register", { email: $("email").value, password: $("password").value });
+    setStatus("authStatus", "Registered — now log in.", "ok");
+  } catch (e) { setStatus("authStatus", e.message, "err"); }
+};
+
+$("btnLogin").onclick = async () => {
+  try {
+    const result = await api("POST", "/api/auth/login", { email: $("email").value, password: $("password").value });
+    token = result.accessToken;
+    localStorage.setItem("ac-token", token);
+    localStorage.setItem("ac-email", $("email").value);
+    reflectAuth();
+    await listMachines();
+  } catch (e) { setStatus("authStatus", e.message, "err"); }
+};
+
+$("btnLogout").onclick = () => {
+  token = ""; localStorage.removeItem("ac-token"); localStorage.removeItem("ac-email");
+  reflectAuth();
+};
+
+$("btnClaim").onclick = async () => {
+  try {
+    const result = await api("POST", "/api/enrollment/claim",
+      { code: $("pairCode").value.trim().toUpperCase(), displayName: $("pairName").value });
+    setStatus("pairStatus", `Paired: ${result.displayName} (${result.registrationId})`, "ok");
+    setTimeout(listMachines, 5000); // give the Daemon a poll cycle to connect
+    await listMachines();
+  } catch (e) { setStatus("pairStatus", e.message, "err"); }
+};
+
+async function listMachines() {
+  try {
+    const machines = await api("GET", "/api/daemons");
+    const tbody = $("machinesTable").querySelector("tbody");
+    tbody.innerHTML = "";
+    for (const m of machines) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td><span class="dot ${m.online ? "on" : ""}"></span></td>
+        <td>${m.displayName}</td><td class="muted">${m.platform}</td>
+        <td class="muted">${m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : "—"}</td>
+        <td class="muted">${m.registrationId.slice(0, 8)}…</td><td></td>`;
+      const btn = document.createElement("button");
+      btn.textContent = "Browse";
+      btn.disabled = !m.online;
+      btn.onclick = () => { currentMachine = m; $("browseTitle").textContent = m.displayName; list(); };
+      tr.lastElementChild.appendChild(btn);
+      tbody.appendChild(tr);
+    }
+    $("machinesTable").hidden = machines.length === 0;
+    setStatus("machinesStatus", machines.length ? "" : "No machines paired yet.");
+  } catch (e) { setStatus("machinesStatus", e.message, "err"); }
+}
+$("btnMachines").onclick = listMachines;
+
+async function list() {
+  if (!currentMachine) { setStatus("filesStatus", "Pick a machine first.", "err"); return; }
+  try {
+    const entries = await api("GET",
+      `/api/daemons/${currentMachine.registrationId}/list?path=${encodeURIComponent($("path").value)}`);
+    entries.sort((a, b) => (b.isDirectory - a.isDirectory) || a.name.localeCompare(b.name));
+    const tbody = $("filesTable").querySelector("tbody");
+    tbody.innerHTML = "";
+    for (const e of entries) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${e.isDirectory ? "📁" : "📄"} ${e.name}</td>
+        <td class="muted">${e.isDirectory ? "" : formatSize(e.sizeBytes)}</td>
+        <td class="muted">${new Date(e.modifiedAt).toLocaleString()}</td>`;
+      if (e.isDirectory) {
+        tr.className = "click";
+        tr.onclick = () => { $("path").value = join($("path").value, e.name); list(); };
+      }
+      tbody.appendChild(tr);
+    }
+    $("filesTable").hidden = false;
+    setStatus("filesStatus", `${entries.length} entries`);
+  } catch (e) { $("filesTable").hidden = true; setStatus("filesStatus", e.message, "err"); }
+}
+$("btnList").onclick = list;
+$("btnUp").onclick = () => {
+  const parts = $("path").value.replace(/\/+$/, "").split("/");
+  if (parts.length > 2) parts.pop(); else return;
+  $("path").value = parts.join("/") || "/";
+  list();
+};
+$("path").addEventListener("keydown", e => { if (e.key === "Enter") list(); });
+
+const join = (base, name) => base.replace(/\/+$/, "") + "/" + name;
+const formatSize = (n) => n == null ? "" : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+
+reflectAuth();
+health();
+setInterval(health, 5000);
+if (token) listMachines();
+</script>
+</body>
+</html>

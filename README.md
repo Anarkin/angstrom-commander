@@ -13,7 +13,11 @@ Prerequisite: Docker (dev machines typically run Rancher Desktop).
 docker compose up --build
 ```
 
-brings up PostgreSQL, the Server on <http://localhost:5080>, and a Daemon that dials out to it, exposing the repo directory read-only as `/data`. Walk through pairing your first machine (TV-style: the Daemon shows a code, you claim it):
+brings up PostgreSQL, the Server on <http://localhost:5080>, and a Daemon that dials out to it, exposing the repo directory read-only as `/data`.
+
+The easiest way to try it: open [tools/api-console.html](tools/api-console.html) in a browser — register, log in, claim the pairing code from `docker compose logs daemon`, and browse the machine's files, all point-and-click.
+
+The same flow with curl (TV-style pairing: the Daemon shows a code, you claim it):
 
 ```sh
 # 1. Create an account and log in (grab accessToken from the response)

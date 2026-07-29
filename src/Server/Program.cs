@@ -11,6 +11,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSignalR();
 builder.Services.AddMemoryCache();
+builder.Services.AddCors();
 builder.Services.AddSingleton<IDaemonConnectionRegistry, InMemoryDaemonConnectionRegistry>();
 
 builder.Services.AddDbContext<AppDbContext>(options =>
@@ -61,6 +62,13 @@ if (app.Configuration.GetValue("Database:MigrateOnStartup", defaultValue: true))
 {
     using var scope = app.Services.CreateScope();
     await scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.MigrateAsync();
+}
+
+if (app.Environment.IsDevelopment())
+{
+    // Lets local dev pages (tools/api-console.html, later the WebClient dev server)
+    // call the API from another origin. Development only — never in real environments.
+    app.UseCors(static policy => policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
 }
 
 app.UseAuthentication();
