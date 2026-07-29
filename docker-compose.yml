@@ -24,6 +24,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      # The aspnet base image has no curl; bash /dev/tcp works for a listen check.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
 
   daemon:
     build:
@@ -39,7 +45,8 @@ services:
       # Machine identity (keypair + registration) survives restarts.
       - daemon-state:/state
     depends_on:
-      - server
+      server:
+        condition: service_healthy
 
 volumes:
   daemon-state:
