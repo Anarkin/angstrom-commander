@@ -9,6 +9,7 @@ builder.Services.Configure<RelayOptions>(builder.Configuration.GetSection(RelayO
 builder.Services.AddSingleton(static sp =>
     new PathSandbox(sp.GetRequiredService<IOptions<RelayOptions>>().Value.AllowedRoots));
 builder.Services.AddSingleton<ListDirectoryHandler>();
+builder.Services.AddSingleton<DownloadFileHandler>();
 builder.Services.AddSingleton<DaemonIdentityStore>();
 builder.Services.AddHttpClient<ServerApiClient>(static (sp, client) =>
 {

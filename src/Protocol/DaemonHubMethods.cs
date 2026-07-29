@@ -4,4 +4,5 @@ namespace AngstromCommander.Protocol;
 public static class DaemonHubMethods
 {
     public const string ListDirectory = "ListDirectory";
+    public const string DownloadFile = "DownloadFile";
 }

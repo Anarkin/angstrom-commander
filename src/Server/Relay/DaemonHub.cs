@@ -12,8 +12,47 @@ namespace AngstromCommander.Server.Relay;
 /// earned by signing a challenge with its registered private key.
 /// </summary>
 [Authorize(Policy = AuthPolicies.Daemon)]
-internal sealed class DaemonHub(IDaemonConnectionRegistry registry, AppDbContext db) : Hub
+internal sealed class DaemonHub(IDaemonConnectionRegistry registry, FileTransferRegistry transfers, AppDbContext db) : Hub
 {
+    private const int MaxChunkBytes = 256 * 1024;
+
+    /// <summary>
+    /// Client-to-server streaming: the Daemon pushes a requested file's bytes, chunk by
+    /// chunk, into the transfer's channel. The bounded channel gives backpressure — if
+    /// the downloading client reads slowly, the Daemon's stream slows with it.
+    /// </summary>
+    public async Task UploadFileChunks(Guid transferId, IAsyncEnumerable<byte[]> chunks)
+    {
+        var registrationId = this.GetRegistrationId();
+        if (registrationId is null || !transfers.TryGet(transferId, registrationId.Value, out var channel))
+        {
+            throw new HubException("Unknown transfer.");
+        }
+
+        try
+        {
+            // No ConnectionAborted here: SignalR already terminates the incoming stream
+            // (with an error) when the connection drops, and long-polling briefly trips
+            // that token between polls, which would abort healthy transfers.
+            await foreach (var chunk in chunks)
+            {
+                if (chunk.Length > MaxChunkBytes)
+                {
+                    throw new HubException("Chunk too large.");
+                }
+
+                await channel.Writer.WriteAsync(chunk);
+            }
+
+            channel.Writer.TryComplete();
+        }
+        catch (Exception ex)
+        {
+            channel.Writer.TryComplete(ex);
+            throw;
+        }
+    }
+
     public override async Task OnConnectedAsync()
     {
         var registrationId = this.GetRegistrationId();
