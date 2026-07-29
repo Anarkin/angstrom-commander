@@ -15,10 +15,7 @@ docker compose up --build
 
 brings up PostgreSQL, the Server on <http://localhost:5080>, and a Daemon that dials out to it, exposing the repo directory read-only as `/data`.
 
-Two easy ways to try it:
-
-- [tools/api.http](tools/api.http) — run the requests top to bottom in your IDE (VS Code REST Client etc.); token and registration id chain automatically.
-- [tools/api-console.html](tools/api-console.html) — open in a browser for a point-and-click version (register, log in, pair, browse files).
+The easiest way to try it: open [tools/api.http](tools/api.http) and run the requests top to bottom in your IDE (VS Code REST Client etc.) — the token and registration id chain between requests automatically.
 
 The same flow with curl (TV-style pairing: the Daemon shows a code, you claim it):
 

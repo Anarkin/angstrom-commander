@@ -66,8 +66,8 @@ if (app.Configuration.GetValue("Database:MigrateOnStartup", defaultValue: true))
 
 if (app.Environment.IsDevelopment())
 {
-    // Lets local dev pages (tools/api-console.html, later the WebClient dev server)
-    // call the API from another origin. Development only — never in real environments.
+    // Lets local dev pages (e.g. the future WebClient dev server) call the API from
+    // another origin. Development only — never in real environments.
     app.UseCors(static policy => policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
 }
 
