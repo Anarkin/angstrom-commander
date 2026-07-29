@@ -53,15 +53,20 @@ Authorization: Bearer {{token}}
 GET {{server}}/api/daemons/{{registrationId}}/list?path=/data/src
 Authorization: Bearer {{token}}
 
+### The container's root — "/" is itself an allowed root in docker-compose.yml
+GET {{server}}/api/daemons/{{registrationId}}/list?path=/
+Authorization: Bearer {{token}}
+
 ### 6. Download a file through the relay (streamed in chunks, never buffered whole)
 GET {{server}}/api/daemons/{{registrationId}}/download?path=/data/README.md
 Authorization: Bearer {{token}}
 
-### Sandbox refuses paths outside allowed roots → 400
+### Sandbox refusal demo — NOTE: compose currently allows "/" too, so these return 200.
+### To watch the sandbox refuse (400), remove Relay__AllowedRoots__1 from docker-compose.yml.
 GET {{server}}/api/daemons/{{registrationId}}/list?path=/etc
 Authorization: Bearer {{token}}
 
-### Traversal doesn't fool the canonicalizer either → 400
+### Traversal is canonicalized before the root check (400 when only /data is allowed)
 GET {{server}}/api/daemons/{{registrationId}}/list?path=/data/../etc
 Authorization: Bearer {{token}}
 

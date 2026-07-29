@@ -13,7 +13,7 @@ Prerequisite: Docker (dev machines typically run Rancher Desktop).
 docker compose up --build
 ```
 
-brings up PostgreSQL, the Server on <http://localhost:5080>, and a Daemon that dials out to it, exposing the repo directory read-only as `/data`.
+brings up PostgreSQL, the Server on <http://localhost:5080>, and a Daemon that dials out to it, exposing the repo directory read-only as `/data` (plus, as a dev-only example of "share everything", the container's whole filesystem as `/`).
 
 The easiest way to try it: open [tools/Server.http](tools/Server.http) and run the requests top to bottom in your IDE (VS Code REST Client etc.) — the token and registration id chain between requests automatically.
 

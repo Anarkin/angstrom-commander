@@ -39,6 +39,8 @@ services:
       Relay__ServerUrl: "http://server:8080"
       Relay__StateDirectory: "/state"
       Relay__AllowedRoots__0: "/data"
+      # The container's whole filesystem — a dev-only "share everything" example.
+      Relay__AllowedRoots__1: "/"
     volumes:
       # Sample sandboxed directory: the repo itself, read-only.
       - ./:/data:ro
