@@ -39,8 +39,8 @@ Heavy emphasis on guardrails across the whole repo: every cheap, automatable qua
 - Code coverage collected on every test run
 
 **WebClient + MobileClient**
-- TypeScript strict mode (no `any` escapes) with type-aware lint rules (the typescript-eslint ruleset, run by oxlint/tsgolint)
-- oxlint (type-aware) + oxfmt (Prettier-conformant Rust formatter), enforced in CI (no warnings allowed, formatting is a build failure)
+- TypeScript strict mode (no `any` escapes; `@typescript-eslint` recommended-type-checked rules)
+- ESLint + Prettier, enforced in CI (no warnings allowed, formatting is a build failure)
 
 **infra/**
 - `terraform fmt` + `terraform validate` on every PR
@@ -119,7 +119,7 @@ See the "Provisioning & deployment" diagram at the bottom for how the pieces fit
 
 - GitHub hosts the repo: <https://github.com/Anarkin/angstrom-commander> (private, personal account — free tier is ample for solo, incl. 2,000 Actions minutes/month)
 - CI/CD: GitHub Actions; `azd pipeline config` bootstraps the workflow + OIDC federated identity to Azure (no cloud secrets stored in GitHub)
-- Every PR runs the full guardrail suite: build (warnings = errors), tests, `dotnet format`, oxlint/oxfmt, `terraform fmt`/`validate`
+- Every PR runs the full guardrail suite: build (warnings = errors), tests, `dotnet format`, ESLint/Prettier, `terraform fmt`/`validate`
 - Later: PR-open spawns a demo env (`azd up` for `demo-prN`), PR-close tears it down
 
 ## Dev environment
