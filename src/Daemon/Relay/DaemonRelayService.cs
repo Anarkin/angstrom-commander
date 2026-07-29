@@ -1,4 +1,7 @@
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using AngstromCommander.Daemon.FileOperations;
+using AngstromCommander.Daemon.Identity;
 using AngstromCommander.Protocol;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Options;
@@ -6,31 +9,35 @@ using Microsoft.Extensions.Options;
 namespace AngstromCommander.Daemon.Relay;
 
 /// <summary>
-/// Holds the Daemon's single persistent outbound connection to the Server open and
-/// answers the relay requests the Server pushes down it.
+/// Enrolls this machine if needed (pairing-code flow), then holds the Daemon's single
+/// persistent outbound connection to the Server open, authenticating with a token earned
+/// by signing the Server's challenge, and answers relay requests pushed down the socket.
 /// </summary>
 internal sealed partial class DaemonRelayService(
     IOptions<RelayOptions> options,
+    DaemonIdentityStore identityStore,
+    ServerApiClient serverApi,
     ListDirectoryHandler listDirectoryHandler,
     ILogger<DaemonRelayService> logger) : BackgroundService
 {
-    private static readonly TimeSpan ConnectRetryDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan EnrollmentPollDelay = TimeSpan.FromSeconds(3);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var relayOptions = options.Value;
-        if (relayOptions.ServerUrl is null || string.IsNullOrWhiteSpace(relayOptions.DaemonId))
+        if (relayOptions.ServerUrl is null)
         {
             LogNotConfigured(logger);
             return;
         }
 
-        var hubUrl = new Uri(
-            relayOptions.ServerUrl,
-            $"/hub/daemon?daemonId={Uri.EscapeDataString(relayOptions.DaemonId)}");
+        var registrationId = identityStore.LoadRegistrationId()
+            ?? await this.EnrollAsync(stoppingToken);
 
         await using var connection = new HubConnectionBuilder()
-            .WithUrl(hubUrl)
+            .WithUrl(new Uri(relayOptions.ServerUrl, "/hub/daemon"), hubOptions =>
+                hubOptions.AccessTokenProvider = () => this.GetConnectionTokenAsync(registrationId))
             .WithAutomaticReconnect()
             .Build();
 
@@ -43,7 +50,7 @@ internal sealed partial class DaemonRelayService(
             try
             {
                 await connection.StartAsync(stoppingToken);
-                LogConnected(logger, relayOptions.ServerUrl, relayOptions.DaemonId);
+                LogConnected(logger, relayOptions.ServerUrl, registrationId);
                 break;
             }
             catch (OperationCanceledException)
@@ -52,8 +59,8 @@ internal sealed partial class DaemonRelayService(
             }
             catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidOperationException or TimeoutException)
             {
-                LogConnectFailed(logger, relayOptions.ServerUrl, ConnectRetryDelay.TotalSeconds, ex);
-                await Task.Delay(ConnectRetryDelay, stoppingToken);
+                LogConnectFailed(logger, relayOptions.ServerUrl, RetryDelay.TotalSeconds, ex);
+                await Task.Delay(RetryDelay, stoppingToken);
             }
         }
 
@@ -68,11 +75,68 @@ internal sealed partial class DaemonRelayService(
         }
     }
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Relay is not configured (Relay:ServerUrl and Relay:DaemonId are required); Daemon will not connect to a Server.")]
+    private async Task<Guid> EnrollAsync(CancellationToken cancellationToken)
+    {
+        string publicKeySpki;
+        using (var key = identityStore.GetOrCreateKey())
+        {
+            publicKeySpki = Convert.ToBase64String(key.ExportSubjectPublicKeyInfo());
+        }
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var pairing = await serverApi.RequestPairingCodeAsync(
+                    publicKeySpki, RuntimeInformation.OSDescription, cancellationToken);
+                LogPairingCode(logger, pairing.Code);
+
+                while (DateTimeOffset.UtcNow < pairing.ExpiresAt)
+                {
+                    await Task.Delay(EnrollmentPollDelay, cancellationToken);
+                    if (await serverApi.GetEnrollmentStatusAsync(pairing.Code, cancellationToken) is Guid registrationId)
+                    {
+                        identityStore.SaveRegistrationId(registrationId);
+                        LogEnrolled(logger, registrationId);
+                        return registrationId;
+                    }
+                }
+            }
+            catch (HttpRequestException ex)
+            {
+                LogEnrollmentRetry(logger, RetryDelay.TotalSeconds, ex);
+                await Task.Delay(RetryDelay, cancellationToken);
+            }
+        }
+    }
+
+    private async Task<string?> GetConnectionTokenAsync(Guid registrationId)
+    {
+        var nonce = await serverApi.GetChallengeNonceAsync(registrationId, CancellationToken.None);
+        string signature;
+        using (var key = identityStore.GetOrCreateKey())
+        {
+            signature = Convert.ToBase64String(
+                key.SignData(Convert.FromBase64String(nonce), HashAlgorithmName.SHA256));
+        }
+
+        return await serverApi.GetConnectionTokenAsync(registrationId, signature, CancellationToken.None);
+    }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Relay is not configured (Relay:ServerUrl is required); Daemon will not connect to a Server.")]
     private static partial void LogNotConfigured(ILogger logger);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Connected to Server {ServerUrl} as Daemon '{DaemonId}'.")]
-    private static partial void LogConnected(ILogger logger, Uri serverUrl, string daemonId);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "PAIRING CODE: {Code} — enter this code in a logged-in client to pair this machine (expires in 10 minutes).")]
+    private static partial void LogPairingCode(ILogger logger, string code);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Enrolled: this machine is registration {RegistrationId}.")]
+    private static partial void LogEnrolled(ILogger logger, Guid registrationId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Enrollment attempt failed; retrying in {RetrySeconds}s.")]
+    private static partial void LogEnrollmentRetry(ILogger logger, double retrySeconds, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Connected to Server {ServerUrl} as registration {RegistrationId}.")]
+    private static partial void LogConnected(ILogger logger, Uri serverUrl, Guid registrationId);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not connect to Server {ServerUrl}; retrying in {RetrySeconds}s.")]
     private static partial void LogConnectFailed(ILogger logger, Uri serverUrl, double retrySeconds, Exception exception);

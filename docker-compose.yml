@@ -1,10 +1,27 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: angstrom
+      POSTGRES_PASSWORD: angstrom
+      POSTGRES_DB: angstrom
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U angstrom"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
   server:
     build:
       context: .
       dockerfile: src/Server/Dockerfile
     ports:
       - "5080:8080"
+    environment:
+      ConnectionStrings__Database: "Host=postgres;Port=5432;Database=angstrom;Username=angstrom;Password=angstrom"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   daemon:
     build:
@@ -12,10 +29,15 @@ services:
       dockerfile: src/Daemon/Dockerfile
     environment:
       Relay__ServerUrl: "http://server:8080"
-      Relay__DaemonId: "compose-daemon"
+      Relay__StateDirectory: "/state"
       Relay__AllowedRoots__0: "/data"
     volumes:
       # Sample sandboxed directory: the repo itself, read-only.
       - ./:/data:ro
+      # Machine identity (keypair + registration) survives restarts.
+      - daemon-state:/state
     depends_on:
       - server
+
+volumes:
+  daemon-state:

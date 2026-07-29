@@ -1,4 +1,5 @@
 using AngstromCommander.Daemon.FileOperations;
+using AngstromCommander.Daemon.Identity;
 using AngstromCommander.Daemon.Relay;
 using Microsoft.Extensions.Options;
 
@@ -8,6 +9,15 @@ builder.Services.Configure<RelayOptions>(builder.Configuration.GetSection(RelayO
 builder.Services.AddSingleton(static sp =>
     new PathSandbox(sp.GetRequiredService<IOptions<RelayOptions>>().Value.AllowedRoots));
 builder.Services.AddSingleton<ListDirectoryHandler>();
+builder.Services.AddSingleton<DaemonIdentityStore>();
+builder.Services.AddHttpClient<ServerApiClient>(static (sp, client) =>
+{
+    var serverUrl = sp.GetRequiredService<IOptions<RelayOptions>>().Value.ServerUrl;
+    if (serverUrl is not null)
+    {
+        client.BaseAddress = serverUrl;
+    }
+});
 builder.Services.AddHostedService<DaemonRelayService>();
 
 var app = builder.Build();
