@@ -1,6 +1,6 @@
 using System.Net;
 
-namespace AngstromCommander.Daemon.Identity;
+namespace AngstromCommander.Daemon.ServerApi;
 
 /// <summary>The Daemon's HTTP surface toward the Server: enrollment and connection-token auth.</summary>
 internal sealed class ServerApiClient(HttpClient http)

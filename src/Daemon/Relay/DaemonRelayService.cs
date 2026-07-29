@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using AngstromCommander.Daemon.FileOperations;
 using AngstromCommander.Daemon.Identity;
+using AngstromCommander.Daemon.ServerApi;
 using AngstromCommander.Protocol;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;

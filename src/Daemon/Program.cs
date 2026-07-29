@@ -1,6 +1,7 @@
 using AngstromCommander.Daemon.FileOperations;
 using AngstromCommander.Daemon.Identity;
 using AngstromCommander.Daemon.Relay;
+using AngstromCommander.Daemon.ServerApi;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
