@@ -1,4 +1,4 @@
-# Angstrom Commander API — for the VS Code "REST Client" extension (humao.rest-client).
+# Server API — for the VS Code "REST Client" extension (humao.rest-client).
 # Click "Send Request" top to bottom; named responses feed the variables automatically.
 
 @server = http://localhost:5080
