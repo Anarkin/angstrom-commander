@@ -1,0 +1,71 @@
+# Angstrom Commander API — for the VS Code "REST Client" extension (humao.rest-client).
+# Click "Send Request" top to bottom; named responses feed the variables automatically.
+
+@server = http://localhost:5080
+@email = you@example.com
+@password = Sup3rSecret!
+
+### Health check
+GET {{server}}/healthz
+
+### 1. Register an account (once per email)
+POST {{server}}/api/auth/register
+Content-Type: application/json
+
+{ "email": "{{email}}", "password": "{{password}}" }
+
+### 2. Log in — everything below picks the token up from this response
+# @name login
+POST {{server}}/api/auth/login
+Content-Type: application/json
+
+{ "email": "{{email}}", "password": "{{password}}" }
+
+###
+@token = {{login.response.body.$.accessToken}}
+
+### 3. Pair a machine — paste the code from: docker compose logs daemon
+#    (skip if this Daemon is already paired; codes are one-time and expire in 10 min)
+@pairingCode = PASTE_CODE_HERE
+
+# @name claim
+POST {{server}}/api/enrollment/claim
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "code": "{{pairingCode}}", "displayName": "Compose Daemon" }
+
+### 4. My machines — online status appears ~5s after a claim
+# @name machines
+GET {{server}}/api/daemons
+Authorization: Bearer {{token}}
+
+###
+@registrationId = {{machines.response.body.$[0].registrationId}}
+
+### 5. List a directory through the relay
+GET {{server}}/api/daemons/{{registrationId}}/list?path=/data
+Authorization: Bearer {{token}}
+
+### Subfolder
+GET {{server}}/api/daemons/{{registrationId}}/list?path=/data/src
+Authorization: Bearer {{token}}
+
+### Sandbox refuses paths outside allowed roots → 400
+GET {{server}}/api/daemons/{{registrationId}}/list?path=/etc
+Authorization: Bearer {{token}}
+
+### Traversal doesn't fool the canonicalizer either → 400
+GET {{server}}/api/daemons/{{registrationId}}/list?path=/data/../etc
+Authorization: Bearer {{token}}
+
+### No token → 401
+GET {{server}}/api/daemons/{{registrationId}}/list?path=/data
+
+### Someone else's / unknown machine → 404
+GET {{server}}/api/daemons/00000000-0000-0000-0000-000000000000/list?path=/data
+Authorization: Bearer {{token}}
+
+# Not included: /api/enrollment/code, /api/enrollment/status and /api/daemon-auth/* —
+# those are called by the Daemon itself (the token one needs an ECDsa signature you
+# can't produce in an .http file). Watch them happen in: docker compose logs daemon
