@@ -58,6 +58,14 @@ internal static class EnrollmentEndpoints
             static async (ClaimRequest request, HttpContext http, AppDbContext db, CancellationToken cancellationToken) =>
             {
                 var userId = Guid.Parse(http.User.FindFirst(AuthClaims.Subject)!.Value);
+
+                // A JWT stays valid after its account is gone (e.g. wiped dev DB, deleted user);
+                // that's an auth failure, not a 500-worthy FK violation.
+                if (!await db.Users.AnyAsync(u => u.Id == userId, cancellationToken))
+                {
+                    return Results.Unauthorized();
+                }
+
                 var pairingCode = await db.PairingCodes
                     .FirstOrDefaultAsync(c => c.Code == request.Code, cancellationToken);
                 if (pairingCode is null

@@ -3,8 +3,11 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using AngstromCommander.Protocol;
+using AngstromCommander.Server.Data;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace AngstromCommander.Server.Tests.Integration;
 
@@ -104,6 +107,33 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
 
         using var response = await anonymousClient.GetAsync(
             new Uri($"/api/daemons/{Guid.NewGuid()}/list?path=/data", UriKind.Relative));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task TokenOfDeletedUserGetsUnauthorizedNotServerError()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+
+        using var client = factory.CreateClient();
+        var token = await RegisterAndLoginAsync(client, "ghost@example.com");
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        // The account vanishes while the JWT is still valid (wiped dev DB, deleted user, …).
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.Users.Where(u => u.Email == "ghost@example.com").ExecuteDeleteAsync();
+        }
+
+        using var daemonKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var publicKeySpki = Convert.ToBase64String(daemonKey.ExportSubjectPublicKeyInfo());
+        var pairing = await PostAsync<PairingResponse>(
+            client, "/api/enrollment/code", new { publicKeySpki, platform = "TestOS" });
+
+        using var response = await client.PostAsJsonAsync(
+            "/api/enrollment/claim", new { code = pairing.Code, displayName = "Ghost Machine" });
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }

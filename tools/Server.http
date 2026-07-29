@@ -15,6 +15,8 @@ Content-Type: application/json
 { "email": "{{email}}", "password": "{{password}}" }
 
 ### 2. Log in — everything below picks the token up from this response
+#    NOTE: after `docker compose down -v` the accounts are gone — re-send
+#    register + login so you're not holding a token for a deleted user.
 # @name login
 POST {{server}}/api/auth/login
 Content-Type: application/json
