@@ -192,6 +192,99 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
+    [Fact]
+    public async Task DownloadStreamsFileBytesThroughRelay()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+        using var userClient = factory.CreateClient();
+        var userToken = await RegisterAndLoginAsync(userClient, "dl@example.com");
+        userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+
+        // Big enough for several 64 KB chunks; random so corruption can't hide.
+        var payload = new byte[300_000];
+        RandomNumberGenerator.Fill(payload);
+
+        var (registrationId, connection) = await ConnectDaemonAsync(factory, userClient, conn =>
+            conn.On<DownloadFileRequest, DownloadFileResponse>(
+                DaemonHubMethods.DownloadFile,
+                request =>
+                {
+                    _ = Task.Run(() => conn.InvokeAsync(
+                        ServerHubMethods.UploadFileChunks, request.TransferId, ChunksOf(payload)));
+                    return DownloadFileResponse.ForFile("blob.bin", payload.Length);
+                }));
+
+        await using (connection)
+        {
+            using var response = await userClient.GetAsync(
+                new Uri($"/api/daemons/{registrationId}/download?path=/data/blob.bin", UriKind.Relative));
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Assert.Fail(await response.Content.ReadAsStringAsync());
+            }
+
+            Assert.Contains("blob.bin", response.Content.Headers.ContentDisposition?.ToString(), StringComparison.Ordinal);
+            var bytes = await response.Content.ReadAsByteArrayAsync();
+            Assert.Equal(payload, bytes);
+        }
+    }
+
+    [Fact]
+    public async Task DownloadSurfacesDaemonReportedError()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+        using var userClient = factory.CreateClient();
+        var userToken = await RegisterAndLoginAsync(userClient, "dlerr@example.com");
+        userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+
+        var (registrationId, connection) = await ConnectDaemonAsync(factory, userClient, static conn =>
+            conn.On<DownloadFileRequest, DownloadFileResponse>(
+                DaemonHubMethods.DownloadFile,
+                static request => DownloadFileResponse.ForError("Path is outside the allowed roots.")));
+
+        await using (connection)
+        {
+            using var response = await userClient.GetAsync(
+                new Uri($"/api/daemons/{registrationId}/download?path=/forbidden", UriKind.Relative));
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+    }
+
+    private static async IAsyncEnumerable<byte[]> ChunksOf(byte[] payload)
+    {
+        const int chunkSize = 64 * 1024;
+        for (var offset = 0; offset < payload.Length; offset += chunkSize)
+        {
+            await Task.Yield();
+            yield return payload[offset..Math.Min(offset + chunkSize, payload.Length)];
+        }
+    }
+
+    private static async Task<(Guid RegistrationId, HubConnection Connection)> ConnectDaemonAsync(
+        ServerFactory factory, HttpClient authenticatedUserClient, Action<HubConnection> configure)
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var publicKeySpki = Convert.ToBase64String(key.ExportSubjectPublicKeyInfo());
+        using var daemonClient = factory.CreateClient();
+        var pairing = await PostAsync<PairingResponse>(
+            daemonClient, "/api/enrollment/code", new { publicKeySpki, platform = "TestOS" });
+        var claim = await PostAsync<ClaimResponse>(
+            authenticatedUserClient, "/api/enrollment/claim", new { code = pairing.Code, displayName = "Machine" });
+        var challenge = await PostAsync<ChallengeResponse>(
+            daemonClient, "/api/daemon-auth/challenge", new { registrationId = claim.RegistrationId });
+        var signature = Convert.ToBase64String(
+            key.SignData(Convert.FromBase64String(challenge.Nonce), HashAlgorithmName.SHA256));
+        var token = await PostAsync<TokenResponse>(
+            daemonClient, "/api/daemon-auth/token", new { registrationId = claim.RegistrationId, signature });
+
+        var connection = BuildDaemonConnection(factory, token.AccessToken);
+        configure(connection);
+        await connection.StartAsync();
+        return (claim.RegistrationId, connection);
+    }
+
     private static async Task<Guid> EnrollDaemonAsync(ServerFactory factory, HttpClient authenticatedUserClient)
     {
         using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);

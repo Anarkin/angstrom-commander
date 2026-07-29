@@ -9,6 +9,7 @@ namespace AngstromCommander.Server.Relay;
 internal static class RelayEndpoints
 {
     private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ChunkTimeout = TimeSpan.FromSeconds(60);
 
     public static IEndpointRouteBuilder MapRelayEndpoints(this IEndpointRouteBuilder app)
     {
@@ -88,7 +89,102 @@ internal static class RelayEndpoints
             })
             .RequireAuthorization(AuthPolicies.User);
 
+        app.MapGet(
+            "/api/daemons/{registrationId:guid}/download",
+            static async (
+                Guid registrationId,
+                string path,
+                HttpContext http,
+                AppDbContext db,
+                IDaemonConnectionRegistry registry,
+                FileTransferRegistry transfers,
+                IHubContext<DaemonHub> hub,
+                CancellationToken cancellationToken) =>
+            {
+                var userId = GetUserId(http);
+                var owned = await db.DaemonRegistrations.AsNoTracking().AnyAsync(
+                    r => r.Id == registrationId && r.UserId == userId && r.RevokedAt == null,
+                    cancellationToken);
+                if (!owned)
+                {
+                    return Results.NotFound(new { error = "No such machine." });
+                }
+
+                if (!registry.TryGetConnection(registrationId.ToString(), out var connectionId))
+                {
+                    return Results.Problem(
+                        detail: "The machine is not connected right now.",
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+
+                var transferId = transfers.Create(registrationId);
+                DownloadFileResponse response;
+                try
+                {
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    timeout.CancelAfter(OperationTimeout);
+                    response = await hub.Clients.Client(connectionId)
+                        .InvokeAsync<DownloadFileResponse>(
+                            DaemonHubMethods.DownloadFile,
+                            new DownloadFileRequest(transferId, path),
+                            timeout.Token);
+                }
+                catch (Exception ex) when (ex is IOException or OperationCanceledException)
+                {
+                    transfers.Remove(transferId);
+                    return Results.Problem(
+                        detail: "The machine did not answer.",
+                        statusCode: StatusCodes.Status504GatewayTimeout);
+                }
+
+                if (response.Error is not null || response.FileName is null)
+                {
+                    transfers.Remove(transferId);
+                    return Results.BadRequest(new { error = response.Error ?? "The machine sent no file metadata." });
+                }
+
+                transfers.TryGetChannel(transferId, out var channel);
+                return Results.Stream(
+                    destination => PumpTransferAsync(transfers, transferId, channel, destination, http.RequestAborted),
+                    contentType: "application/octet-stream",
+                    fileDownloadName: response.FileName);
+            })
+            .RequireAuthorization(AuthPolicies.User);
+
         return app;
+    }
+
+    private static async Task PumpTransferAsync(
+        FileTransferRegistry transfers,
+        Guid transferId,
+        System.Threading.Channels.Channel<byte[]> channel,
+        Stream destination,
+        CancellationToken requestAborted)
+    {
+        try
+        {
+            while (true)
+            {
+                // Rolling per-chunk timeout: a Daemon that stops sending mid-transfer
+                // must not hold the response open forever.
+                using var chunkTimeout = CancellationTokenSource.CreateLinkedTokenSource(requestAborted);
+                chunkTimeout.CancelAfter(ChunkTimeout);
+                if (!await channel.Reader.WaitToReadAsync(chunkTimeout.Token))
+                {
+                    break;
+                }
+
+                while (channel.Reader.TryRead(out var chunk))
+                {
+                    await destination.WriteAsync(chunk, requestAborted);
+                }
+            }
+        }
+        finally
+        {
+            // Also unblocks the Daemon-side hub invocation if the client went away.
+            transfers.Remove(transferId);
+        }
     }
 
     private static Guid GetUserId(HttpContext http)

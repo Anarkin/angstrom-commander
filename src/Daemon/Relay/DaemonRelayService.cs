@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using AngstromCommander.Daemon.FileOperations;
 using AngstromCommander.Daemon.Identity;
 using AngstromCommander.Protocol;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Options;
 
@@ -18,8 +19,11 @@ internal sealed partial class DaemonRelayService(
     DaemonIdentityStore identityStore,
     ServerApiClient serverApi,
     ListDirectoryHandler listDirectoryHandler,
+    DownloadFileHandler downloadFileHandler,
     ILogger<DaemonRelayService> logger) : BackgroundService
 {
+    private const int DownloadChunkBytes = 64 * 1024;
+
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan EnrollmentPollDelay = TimeSpan.FromSeconds(3);
 
@@ -44,6 +48,23 @@ internal sealed partial class DaemonRelayService(
         connection.On<ListDirectoryRequest, ListDirectoryResponse>(
             DaemonHubMethods.ListDirectory,
             request => listDirectoryHandler.Handle(request));
+
+        connection.On<DownloadFileRequest, DownloadFileResponse>(
+            DaemonHubMethods.DownloadFile,
+            request =>
+            {
+                var response = downloadFileHandler.Open(request, out var file);
+                if (file is not null)
+                {
+                    // The metadata response returns first; the bytes follow as a separate
+                    // streaming invocation tagged with the transfer id. The iterator owns
+                    // and disposes the stream.
+                    var chunks = ReadFileChunksAsync(file, stoppingToken);
+                    _ = this.PumpFileAsync(connection, request.TransferId, chunks, stoppingToken);
+                }
+
+                return response;
+            });
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -110,6 +131,38 @@ internal sealed partial class DaemonRelayService(
         }
     }
 
+    private async Task PumpFileAsync(HubConnection connection, Guid transferId, IAsyncEnumerable<byte[]> chunks, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await connection.InvokeAsync(ServerHubMethods.UploadFileChunks, transferId, chunks, cancellationToken);
+        }
+        catch (Exception ex) when (ex is HubException or IOException or InvalidOperationException or OperationCanceledException)
+        {
+            LogTransferAborted(logger, transferId, ex);
+        }
+    }
+
+    private static async IAsyncEnumerable<byte[]> ReadFileChunksAsync(
+        FileStream file,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await using (file)
+        {
+            while (true)
+            {
+                var buffer = new byte[DownloadChunkBytes];
+                var read = await file.ReadAtLeastAsync(buffer, DownloadChunkBytes, throwOnEndOfStream: false, cancellationToken);
+                if (read == 0)
+                {
+                    yield break;
+                }
+
+                yield return read == DownloadChunkBytes ? buffer : buffer[..read];
+            }
+        }
+    }
+
     private async Task<string?> GetConnectionTokenAsync(Guid registrationId)
     {
         var nonce = await serverApi.GetChallengeNonceAsync(registrationId, CancellationToken.None);
@@ -140,4 +193,7 @@ internal sealed partial class DaemonRelayService(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not connect to Server {ServerUrl}; retrying in {RetrySeconds}s.")]
     private static partial void LogConnectFailed(ILogger logger, Uri serverUrl, double retrySeconds, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "File transfer {TransferId} aborted.")]
+    private static partial void LogTransferAborted(ILogger logger, Guid transferId, Exception exception);
 }

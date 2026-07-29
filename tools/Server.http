@@ -53,6 +53,10 @@ Authorization: Bearer {{token}}
 GET {{server}}/api/daemons/{{registrationId}}/list?path=/data/src
 Authorization: Bearer {{token}}
 
+### 6. Download a file through the relay (streamed in chunks, never buffered whole)
+GET {{server}}/api/daemons/{{registrationId}}/download?path=/data/README.md
+Authorization: Bearer {{token}}
+
 ### Sandbox refuses paths outside allowed roots → 400
 GET {{server}}/api/daemons/{{registrationId}}/list?path=/etc
 Authorization: Bearer {{token}}

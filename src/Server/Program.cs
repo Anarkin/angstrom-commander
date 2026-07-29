@@ -9,10 +9,13 @@ using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddSignalR();
+// Default receive limit is 32 KB; file chunks are 64 KB and arrive base64-inflated
+// (~1.37x) over the JSON protocol, so give stream items generous headroom.
+builder.Services.AddSignalR(static options => options.MaximumReceiveMessageSize = 512 * 1024);
 builder.Services.AddMemoryCache();
 builder.Services.AddCors();
 builder.Services.AddSingleton<IDaemonConnectionRegistry, InMemoryDaemonConnectionRegistry>();
+builder.Services.AddSingleton<FileTransferRegistry>();
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Database")));

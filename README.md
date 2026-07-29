@@ -33,6 +33,9 @@ curl -X POST http://localhost:5080/api/enrollment/claim -H "Authorization: Beare
 # 4. Your machines, and their files through the relay
 curl -H "Authorization: Bearer <accessToken>" "http://localhost:5080/api/daemons"
 curl -H "Authorization: Bearer <accessToken>" "http://localhost:5080/api/daemons/<registrationId>/list?path=/data"
+
+# 5. Download a file (streamed through the relay; -OJ saves it under its real name)
+curl -OJ -H "Authorization: Bearer <accessToken>" "http://localhost:5080/api/daemons/<registrationId>/download?path=/data/README.md"
 ```
 
 For working on the code, the [.NET 10 SDK](https://dotnet.microsoft.com/download) (exact version pinned in `global.json`) is enough: `dotnet test` builds everything and runs the test suites (integration tests start their own throwaway PostgreSQL via Testcontainers, so Docker must be running). The WebClient and the Agent join the compose setup as they come to exist; see ARCHITECTURE.md § Dev environment.
