@@ -402,6 +402,8 @@ generated_code = true
 dotnet_diagnostic.CA2007.severity = none
 
 # xUnit only discovers public test classes, which trips CA1515 ("make application types internal").
+# CA1812 ("never instantiated") misfires on test DTOs materialized by the JSON deserializer.
 [tests/**.cs]
 dotnet_diagnostic.CA1515.severity = none
+dotnet_diagnostic.CA1812.severity = none
 

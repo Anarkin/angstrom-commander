@@ -7,7 +7,10 @@ public class HealthEndpointTests
     [Fact]
     public async Task HealthzReturnsOk()
     {
-        using var factory = new WebApplicationFactory<Program>();
+        // No database in this test: health must not depend on one.
+        using var baseFactory = new WebApplicationFactory<Program>();
+        using var factory = baseFactory.WithWebHostBuilder(
+            static builder => builder.UseSetting("Database:MigrateOnStartup", "false"));
         using var client = factory.CreateClient();
 
         var response = await client.GetStringAsync(new Uri("/healthz", UriKind.Relative));

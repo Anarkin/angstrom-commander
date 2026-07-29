@@ -6,7 +6,8 @@ internal sealed class RelayOptions
 
     public Uri? ServerUrl { get; set; }
 
-    public string DaemonId { get; set; } = string.Empty;
+    /// <summary>Where the keypair and registration state live.</summary>
+    public string StateDirectory { get; set; } = "state";
 
     public IList<string> AllowedRoots { get; } = [];
 }

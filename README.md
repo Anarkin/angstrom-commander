@@ -13,10 +13,22 @@ Prerequisite: Docker (dev machines typically run Rancher Desktop).
 docker compose up --build
 ```
 
-brings up the Server on <http://localhost:5080> and a Daemon that dials out to it, exposing the repo directory read-only as `/data`. Exercise the relay:
+brings up PostgreSQL, the Server on <http://localhost:5080>, and a Daemon that dials out to it, exposing the repo directory read-only as `/data`. Walk through pairing your first machine (TV-style: the Daemon shows a code, you claim it):
 
 ```sh
-curl "http://localhost:5080/api/daemons/compose-daemon/list?path=/data"
+# 1. Create an account and log in (grab accessToken from the response)
+curl -X POST http://localhost:5080/api/auth/register -H "Content-Type: application/json" -d '{"email":"you@example.com","password":"Sup3rSecret!"}'
+curl -X POST http://localhost:5080/api/auth/login    -H "Content-Type: application/json" -d '{"email":"you@example.com","password":"Sup3rSecret!"}'
+
+# 2. Find the pairing code the Daemon printed
+docker compose logs daemon | grep "PAIRING CODE"
+
+# 3. Claim it (grab registrationId from the response)
+curl -X POST http://localhost:5080/api/enrollment/claim -H "Authorization: Bearer <accessToken>" -H "Content-Type: application/json" -d '{"code":"<CODE>","displayName":"Compose Daemon"}'
+
+# 4. Your machines, and their files through the relay
+curl -H "Authorization: Bearer <accessToken>" "http://localhost:5080/api/daemons"
+curl -H "Authorization: Bearer <accessToken>" "http://localhost:5080/api/daemons/<registrationId>/list?path=/data"
 ```
 
-For working on the code, the [.NET 10 SDK](https://dotnet.microsoft.com/download) (exact version pinned in `global.json`) is enough: `dotnet test` builds everything and runs the test suites. PostgreSQL, the WebClient, and the Agent join the compose setup as they come to exist; see ARCHITECTURE.md § Dev environment.
+For working on the code, the [.NET 10 SDK](https://dotnet.microsoft.com/download) (exact version pinned in `global.json`) is enough: `dotnet test` builds everything and runs the test suites (integration tests start their own throwaway PostgreSQL via Testcontainers, so Docker must be running). The WebClient and the Agent join the compose setup as they come to exist; see ARCHITECTURE.md § Dev environment.

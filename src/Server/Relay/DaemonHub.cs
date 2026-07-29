@@ -1,45 +1,58 @@
+using AngstromCommander.Server.Auth;
+using AngstromCommander.Server.Data;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 
 namespace AngstromCommander.Server.Relay;
 
 /// <summary>
 /// The endpoint Daemons dial OUT to and hold open; the Server pushes relay requests
-/// back down these connections. Identification by query string is a walking-skeleton
-/// placeholder — keypair authentication arrives with enrollment.
+/// back down these connections. A Daemon gets here only with a connection token it
+/// earned by signing a challenge with its registered private key.
 /// </summary>
-internal sealed class DaemonHub(IDaemonConnectionRegistry registry) : Hub
+[Authorize(Policy = AuthPolicies.Daemon)]
+internal sealed class DaemonHub(IDaemonConnectionRegistry registry, AppDbContext db) : Hub
 {
-    internal const string DaemonIdQueryParameter = "daemonId";
-
-    public override Task OnConnectedAsync()
+    public override async Task OnConnectedAsync()
     {
-        var daemonId = this.GetDaemonId();
-        if (daemonId is null)
+        var registrationId = this.GetRegistrationId();
+        if (registrationId is null)
         {
             this.Context.Abort();
         }
         else
         {
-            registry.Register(daemonId, this.Context.ConnectionId);
+            registry.Register(registrationId.Value.ToString(), this.Context.ConnectionId);
+            await this.TouchLastSeenAsync(registrationId.Value);
         }
 
-        return base.OnConnectedAsync();
+        await base.OnConnectedAsync();
     }
 
-    public override Task OnDisconnectedAsync(Exception? exception)
+    public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        var daemonId = this.GetDaemonId();
-        if (daemonId is not null)
+        var registrationId = this.GetRegistrationId();
+        if (registrationId is not null)
         {
-            registry.Unregister(daemonId, this.Context.ConnectionId);
+            registry.Unregister(registrationId.Value.ToString(), this.Context.ConnectionId);
+            await this.TouchLastSeenAsync(registrationId.Value);
         }
 
-        return base.OnDisconnectedAsync(exception);
+        await base.OnDisconnectedAsync(exception);
     }
 
-    private string? GetDaemonId()
+    private Guid? GetRegistrationId()
     {
-        var daemonId = this.Context.GetHttpContext()?.Request.Query[DaemonIdQueryParameter].ToString();
-        return string.IsNullOrWhiteSpace(daemonId) ? null : daemonId;
+        var claim = this.Context.User?.FindFirst(AuthClaims.DaemonRegistrationId)?.Value;
+        return Guid.TryParse(claim, out var id) ? id : null;
+    }
+
+    private async Task TouchLastSeenAsync(Guid registrationId)
+    {
+        var now = DateTimeOffset.UtcNow;
+        await db.DaemonRegistrations
+            .Where(r => r.Id == registrationId)
+            .ExecuteUpdateAsync(s => s.SetProperty(static r => r.LastSeenAt, now));
     }
 }
