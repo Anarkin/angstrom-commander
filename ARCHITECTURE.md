@@ -24,7 +24,7 @@ Besides the products, the repo carries supporting codebases — authored and rev
 ## Tech stack
 
 - **Daemon + Server + Agent**: .NET, latest LTS (currently .NET 10); xUnit for tests
-  - Server additionally: PostgreSQL + EF Core (migrations; fresh envs self-initialize schema); OpenIddict for the OAuth 2.1 authorization server
+  - Server additionally: PostgreSQL + EF Core (migrations; fresh envs self-initialize schema); ASP.NET Core Identity for user accounts (self-managed email+password; social logins deferred — offering any would trigger the mandatory Apple sign-in rule on iOS); OpenIddict for the OAuth 2.1 authorization server
 - **WebClient**: latest React, TypeScript (strict); Vitest + React Testing Library for tests
 - **MobileClient**: React Native (iOS + Android), TypeScript (strict); Jest + React Native Testing Library for tests (RN's supported runner — Vitest doesn't fit RN)
 
@@ -132,7 +132,6 @@ See the "Provisioning & deployment" diagram at the bottom for how the pieces fit
 
 - Azure hosting flavor for PostgreSQL: Flexible Server (stoppable, not auto-pause) vs Postgres-in-a-container for throwaway demo envs
 - When the direct P2P connection upgrade ships — not whether (see § Scaling: relay egress cost makes it an economic requirement at scale, though not for v1)
-- Identity for user accounts: self-managed email+password (ASP.NET Core Identity) vs social logins (Google/Apple — Apple sign-in becomes mandatory on iOS if any social login is offered) vs outsourced IdP; also feeds the OAuth consent flow
 - Which LLMs earn a slot in the curated model picker at launch (tool-calling quality varies widely across the Foundry catalog); per-model SDK: Claude via the official `Anthropic.Foundry` .NET SDK, others via the OpenAI-compatible surface
 ## Diagrams
 
