@@ -22,6 +22,15 @@ internal static class EnrollmentEndpoints
 
                 key.Dispose();
 
+                // One live code per machine: a restarted Daemon polls only its newest code,
+                // so older unclaimed ones must stop being claimable (they'd pair to nobody).
+                // Expired unclaimed codes are swept opportunistically at the same time.
+                var now = DateTimeOffset.UtcNow;
+                await db.PairingCodes
+                    .Where(c => c.ClaimedRegistrationId == null
+                        && (c.PublicKeySpki == request.PublicKeySpki || c.ExpiresAt < now))
+                    .ExecuteDeleteAsync(cancellationToken);
+
                 var code = new PairingCode
                 {
                     Code = PairingCodeGenerator.Generate(),

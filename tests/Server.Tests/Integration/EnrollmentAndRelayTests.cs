@@ -112,6 +112,35 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task NewPairingCodeInvalidatesThePreviousUnclaimedOne()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+
+        using var userClient = factory.CreateClient();
+        var userToken = await RegisterAndLoginAsync(userClient, "carol@example.com");
+        userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+
+        // The same machine asks twice (e.g. the Daemon restarted).
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var publicKeySpki = Convert.ToBase64String(key.ExportSubjectPublicKeyInfo());
+        using var daemonClient = factory.CreateClient();
+        var stale = await PostAsync<PairingResponse>(
+            daemonClient, "/api/enrollment/code", new { publicKeySpki, platform = "TestOS" });
+        var current = await PostAsync<PairingResponse>(
+            daemonClient, "/api/enrollment/code", new { publicKeySpki, platform = "TestOS" });
+
+        // The orphaned code pairs to nobody — claiming it must fail.
+        using var staleClaim = await userClient.PostAsJsonAsync(
+            "/api/enrollment/claim", new { code = stale.Code, displayName = "Ghost" });
+        Assert.Equal(HttpStatusCode.NotFound, staleClaim.StatusCode);
+
+        // The code the Daemon is actually polling works.
+        var claim = await PostAsync<ClaimResponse>(
+            userClient, "/api/enrollment/claim", new { code = current.Code, displayName = "Real" });
+        Assert.Equal("Real", claim.DisplayName);
+    }
+
+    [Fact]
     public async Task TokenOfDeletedUserGetsUnauthorizedNotServerError()
     {
         using var factory = new ServerFactory(postgres.ConnectionString);
