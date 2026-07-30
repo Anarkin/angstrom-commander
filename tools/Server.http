@@ -1,7 +1,11 @@
 # Server API — for the VS Code "REST Client" extension (humao.rest-client).
 # Click "Send Request" top to bottom; named responses feed the variables automatically.
+#
+# {{server}} comes from the environment picked in VS Code's status bar (local, test —
+# defined in .vscode/settings.json, named per ARCHITECTURE.md's environment glossary).
+# Outside that workspace setup, uncomment a line instead:
+# @server = http://localhost:5080
 
-@server = http://localhost:5080
 @email = you@example.com
 @password = Sup3rSecret!
 
@@ -15,7 +19,8 @@ Content-Type: application/json
 { "email": "{{email}}", "password": "{{password}}" }
 
 ### 2. Log in — everything below picks the token up from this response
-#    NOTE: after `docker compose down -v` the accounts are gone — re-send
+#    NOTE (local only; test's accounts persist in its managed PostgreSQL):
+#    after `docker compose down -v` the accounts are gone — re-send
 #    register + login so you're not holding a token for a deleted user.
 #    Five wrong passwords lock the account for five minutes (401 either way,
 #    with the reason in the ProblemDetails body), and this endpoint answers at
@@ -29,7 +34,7 @@ Content-Type: application/json
 ###
 @token = {{login.response.body.$.accessToken}}
 
-### 3. Pair a machine — paste the code from: docker compose logs daemon
+### 3. Pair a machine — paste the code the Daemon shows (local: docker compose logs daemon)
 #    (skip if this Daemon is already paired; codes are one-time and expire in 10 min)
 @pairingCode = PASTE_CODE_HERE
 

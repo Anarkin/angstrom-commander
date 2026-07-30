@@ -17,7 +17,7 @@ brings up PostgreSQL, the Server on <http://localhost:5080>, the WebClient on <h
 
 Open <http://localhost:5081>, create an account, pair the Daemon with the code from `docker compose logs daemon`, then point both panes at the machine to browse, download, upload, and copy files between paths.
 
-The easiest way to try it: open [tools/Server.http](tools/Server.http) and run the requests top to bottom in your IDE (VS Code REST Client etc.) — the token and registration id chain between requests automatically.
+The easiest way to try it: open [tools/Server.http](tools/Server.http), pick the `local` environment in VS Code's status bar (environments are defined in `.vscode/settings.json` — `test` targets the deployed Azure stamp), and run the requests top to bottom — the token and registration id chain between requests automatically.
 
 The same flow with curl (TV-style pairing: the Daemon shows a code, you claim it):
 

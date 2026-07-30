@@ -1,0 +1,12 @@
+{
+  // Environments for tools/*.http (VS Code REST Client) — pick one in the status bar.
+  // Names follow the environment glossary in ARCHITECTURE.md § Hosting.
+  "rest-client.environmentVariables": {
+    "local": {
+      "server": "http://localhost:5080"
+    },
+    "test": {
+      "server": "https://api.test.angstrom.adamlengyel.com"
+    }
+  }
+}
