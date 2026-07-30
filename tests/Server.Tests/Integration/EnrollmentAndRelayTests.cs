@@ -100,6 +100,73 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task ADaemonsConnectionTokenIsNotAUserToken()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+
+        using var userClient = factory.CreateClient();
+        var userToken = await RegisterAndLoginAsync(userClient, "twotokens@example.com");
+        userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var publicKeySpki = Convert.ToBase64String(key.ExportSubjectPublicKeyInfo());
+        using var daemonClient = factory.CreateClient();
+        var pairing = await PostAsync<PairingResponse>(
+            daemonClient, "/api/enrollment/code", new { publicKeySpki, platform = "TestOS" });
+        var claim = await PostAsync<ClaimResponse>(
+            userClient, "/api/enrollment/claim", new { code = pairing.Code, displayName = "Machine" });
+        var challenge = await PostAsync<ChallengeResponse>(
+            daemonClient, "/api/daemon-auth/challenge", new { registrationId = claim.RegistrationId });
+        var signature = Convert.ToBase64String(
+            key.SignData(Convert.FromBase64String(challenge.Nonce), HashAlgorithmName.SHA256));
+        var daemonToken = await PostAsync<TokenResponse>(
+            daemonClient, "/api/daemon-auth/token", new { registrationId = claim.RegistrationId, signature });
+
+        // A connection token proves a machine owns its key. It says nothing about a user, so it
+        // must not open the endpoints that act on a user's behalf.
+        daemonClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", daemonToken.AccessToken);
+        using var machines = await daemonClient.GetAsync(new Uri("/api/daemons", UriKind.Relative));
+        using var listing = await daemonClient.GetAsync(
+            new Uri($"/api/daemons/{claim.RegistrationId}/list?path=/data", UriKind.Relative));
+
+        Assert.Equal(HttpStatusCode.Forbidden, machines.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, listing.StatusCode);
+    }
+
+    [Fact]
+    public async Task ARevokedMachineIsGoneForGood()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+
+        using var userClient = factory.CreateClient();
+        var userToken = await RegisterAndLoginAsync(userClient, "revoked@example.com");
+        userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+        var registrationId = await EnrollDaemonAsync(factory, userClient);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.DaemonRegistrations
+                .Where(r => r.Id == registrationId)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.RevokedAt, DateTimeOffset.UtcNow));
+        }
+
+        // Revoking has to cut both ways: the machine disappears from the account, and it can no
+        // longer earn a connection token to dial back in with.
+        var machines = await GetAsync<List<MachineResponse>>(userClient, new Uri("/api/daemons", UriKind.Relative));
+        using var listing = await userClient.GetAsync(
+            new Uri($"/api/daemons/{registrationId}/list?path=/data", UriKind.Relative));
+        using var daemonClient = factory.CreateClient();
+        using var challenge = await daemonClient.PostAsJsonAsync(
+            "/api/daemon-auth/challenge", new { registrationId });
+
+        Assert.Empty(machines);
+        Assert.Equal(HttpStatusCode.NotFound, listing.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, challenge.StatusCode);
+    }
+
+    [Fact]
     public async Task RelayRequiresAuthentication()
     {
         using var factory = new ServerFactory(postgres.ConnectionString);
