@@ -115,7 +115,7 @@ Where the code actually is, as of July 2026 — a living list, so update it when
 - Rate limiting buckets callers by remote address, which is only as good as the proxy configuration in front of it
 - Downloads buffer into a browser Blob — fine for documents, wrong for very large files; the fix is a short-lived download ticket in the URL so the browser streams to disk
 - No live-update channel for clients: panes refresh on navigation, and there is no transfer progress
-- The Daemon's private key sits unprotected on disk (no DPAPI/keychain/file-permission hardening) — must be addressed before any real install story
+- The Daemon's private key sits unprotected on disk (no DPAPI/keychain/file-permission hardening) — the sandbox refuses to serve it however the roots are configured, but local file permissions must still be addressed before any real install story
 - The path sandbox resolves links and then opens by path, so a link swapped in between the two would not be caught. Closing that needs opening by handle (`O_NOFOLLOW` and the Windows equivalent); it requires local write access to a shared folder to exploit, so it waits
 - `MapOpenApi()` is not wired, so the contract exists only as a build artifact; there is no browsable API reference
 - The Server integration suite boots a factory per test (~11 s) and could share one

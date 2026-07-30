@@ -13,7 +13,7 @@ Prerequisite: Docker (dev machines typically run Rancher Desktop).
 docker compose up --build
 ```
 
-brings up PostgreSQL, the Server on <http://localhost:5080>, the WebClient on <http://localhost:5081>, and a Daemon that dials out to it. The Daemon shares the repo directory read-only as `/data`, a writable volume as `/uploads`, and — as a dev-only example of "share everything" — the container's whole filesystem read-only as `/`.
+brings up PostgreSQL, the Server on <http://localhost:5080>, the WebClient on <http://localhost:5081>, and a Daemon that dials out to it. The Daemon shares the repo directory read-only as `/data` and a writable volume as `/uploads`; everything else on that machine, including the Daemon's own keypair, stays out of reach.
 
 Open <http://localhost:5081>, create an account, pair the Daemon with the code from `docker compose logs daemon`, then point both panes at the machine to browse, download, upload, and copy files between paths.
 

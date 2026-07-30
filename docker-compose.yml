@@ -57,9 +57,9 @@ services:
       # A writable share, so uploads and machine-to-machine copies have somewhere to land.
       Relay__AllowedRoots__1__Path: "/uploads"
       Relay__AllowedRoots__1__Writable: "true"
-      # The container's whole filesystem — a dev-only "share everything" example, read-only.
-      Relay__AllowedRoots__2__Path: "/"
-      Relay__AllowedRoots__2__Writable: "false"
+      # No "share everything" root here: sharing "/" reaches /state, and handing out the private
+      # key in there hands out this machine's identity. The Daemon refuses that path either way,
+      # but a setup guide should not demonstrate sharing a whole filesystem to begin with.
     volumes:
       # Sample sandboxed directory: the repo itself, read-only.
       - ./:/data:ro

@@ -56,7 +56,7 @@ Authorization: Bearer {{token}}
 GET {{server}}/api/daemons/{{registrationId}}/list?path=/data/src
 Authorization: Bearer {{token}}
 
-### The container's root — "/" is itself an allowed root in docker-compose.yml
+### Outside the shared roots → 400
 GET {{server}}/api/daemons/{{registrationId}}/list?path=/
 Authorization: Bearer {{token}}
 
@@ -87,9 +87,12 @@ Authorization: Bearer {{token}}
 POST {{server}}/api/daemons/{{registrationId}}/copy-to/{{registrationId}}?sourcePath=/data/README.md&targetPath=/uploads/README-copy.md&overwrite=true
 Authorization: Bearer {{token}}
 
-### Sandbox refusal demo — NOTE: compose currently allows "/" too, so these return 200.
-### To watch the sandbox refuse (400), remove Relay__AllowedRoots__2 from docker-compose.yml.
+### Sandbox refusal — outside every allowed root → 400
 GET {{server}}/api/daemons/{{registrationId}}/list?path=/etc
+Authorization: Bearer {{token}}
+
+### The Daemon's own state is refused even if a root were to contain it → 400
+GET {{server}}/api/daemons/{{registrationId}}/download?path=/state/daemon.key
 Authorization: Bearer {{token}}
 
 ### Traversal is canonicalized before the root check (400 when only /data is allowed)

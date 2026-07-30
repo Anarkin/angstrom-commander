@@ -78,6 +78,32 @@ public class PathSandboxTests
     }
 
     [Fact]
+    public void NeverSharesTheDaemonsOwnState()
+    {
+        // The private key in there is this machine's identity: handing it out through a share
+        // would hand out the ability to be this machine.
+        var directory = Directory.CreateTempSubdirectory("ac-state-test-");
+        try
+        {
+            var state = Path.Combine(directory.FullName, "state");
+            Directory.CreateDirectory(state);
+            var sandbox = new PathSandbox(
+                [new AllowedRoot { Path = directory.FullName, Writable = true }], neverShared: state);
+
+            Assert.False(sandbox.TryResolveForRead(Path.Combine(state, "daemon.key"), out _));
+            Assert.False(sandbox.TryResolveForRead(state, out _));
+            Assert.False(sandbox.TryResolveForWrite(Path.Combine(state, "daemon.key"), out _));
+
+            // Everything else under the shared root is unaffected.
+            Assert.True(sandbox.TryResolveForRead(Path.Combine(directory.FullName, "notes.txt"), out _));
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public void BlocksReadsThroughASymlinkLeavingTheRoot()
     {
         using var layout = new LinkedLayout();

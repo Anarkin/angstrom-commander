@@ -16,9 +16,19 @@ internal sealed class PathSandbox
     private static readonly char[] Separators = [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar];
 
     private readonly IReadOnlyList<AllowedRoot> _allowedRoots;
+    private readonly string? _neverShared;
 
-    public PathSandbox(IEnumerable<AllowedRoot> allowedRoots)
+    /// <param name="allowedRoots">The directories this machine shares.</param>
+    /// <param name="neverShared">
+    /// A directory that stays unreachable however the roots are configured — the Daemon's own
+    /// state, which holds the private key that IS this machine's identity. Sharing a folder that
+    /// happens to contain it (a home directory, or the whole disk) would otherwise hand out the
+    /// means to impersonate the machine, and the sandbox is the only thing in a position to know.
+    /// </param>
+    public PathSandbox(IEnumerable<AllowedRoot> allowedRoots, string? neverShared = null)
     {
+        this._neverShared = neverShared is null || !TryMakeReal(neverShared, out var resolved) ? null : resolved;
+
         // Roots go through the same link resolution as requests, so both sides are real
         // locations and a root that is itself reached through a link still matches.
         this._allowedRoots = allowedRoots
@@ -47,6 +57,11 @@ internal sealed class PathSandbox
         resolvedPath = string.Empty;
 
         if (!TryMakeReal(requestedPath, out var real))
+        {
+            return false;
+        }
+
+        if (this._neverShared is not null && Contains(this._neverShared, real))
         {
             return false;
         }

@@ -8,7 +8,10 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<RelayOptions>(builder.Configuration.GetSection(RelayOptions.SectionName));
 builder.Services.AddSingleton(static sp =>
-    new PathSandbox(sp.GetRequiredService<IOptions<RelayOptions>>().Value.AllowedRoots));
+{
+    var relay = sp.GetRequiredService<IOptions<RelayOptions>>().Value;
+    return new PathSandbox(relay.AllowedRoots, neverShared: relay.StateDirectory);
+});
 builder.Services.AddSingleton<ListDirectoryHandler>();
 builder.Services.AddSingleton<DownloadFileHandler>();
 builder.Services.AddSingleton<UploadFileHandler>();
