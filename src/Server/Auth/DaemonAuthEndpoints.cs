@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Security.Cryptography;
 using AngstromCommander.Server.Data;
 using AngstromCommander.Server.Enrollment;
@@ -77,6 +78,7 @@ internal static class DaemonAuthEndpoints
 
                 return TypedResults.Ok(new DaemonTokenResponse(tokens.CreateDaemonToken(request.RegistrationId)));
             })
+            .ValidatesRequest<TokenRequest>()
             .RequireRateLimiting(RateLimitPolicies.Authentication);
 
         return app;
@@ -92,6 +94,8 @@ internal sealed record ChallengeRequest(Guid RegistrationId);
 
 internal sealed record ChallengeResponse(string Nonce);
 
-internal sealed record TokenRequest(Guid RegistrationId, string Signature);
+internal sealed record TokenRequest(
+    Guid RegistrationId,
+    [property: Required][property: StringLength(512)] string Signature);
 
 internal sealed record DaemonTokenResponse(string AccessToken);

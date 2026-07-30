@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using AngstromCommander.Server.Auth;
 using AngstromCommander.Server.Data;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -50,6 +51,7 @@ internal static class EnrollmentEndpoints
                 return TypedResults.Ok(new PairingCodeResponse(code.Code, code.ExpiresAt));
             })
             .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ValidatesRequest<RequestCodeRequest>()
             .RequireRateLimiting(RateLimitPolicies.Authentication);
 
         // Polled by the enrolling Daemon while its code is displayed to the user.
@@ -118,18 +120,23 @@ internal static class EnrollmentEndpoints
                 return TypedResults.Ok(new ClaimResponse(registration.Id, registration.DisplayName));
             })
             .ProducesProblem(StatusCodes.Status404NotFound)
+            .ValidatesRequest<ClaimRequest>()
             .RequireAuthorization(AuthPolicies.User);
 
         return app;
     }
 }
 
-internal sealed record RequestCodeRequest(string PublicKeySpki, string Platform);
+internal sealed record RequestCodeRequest(
+    [property: Required][property: StringLength(1000)] string PublicKeySpki,
+    [property: Required][property: StringLength(200)] string Platform);
 
 internal sealed record PairingCodeResponse(string Code, DateTimeOffset ExpiresAt);
 
 internal sealed record EnrollmentStatusResponse(Guid RegistrationId);
 
-internal sealed record ClaimRequest(string Code, string DisplayName);
+internal sealed record ClaimRequest(
+    [property: Required][property: StringLength(16)] string Code,
+    [property: Required][property: StringLength(200)] string DisplayName);
 
 internal sealed record ClaimResponse(Guid RegistrationId, string DisplayName);

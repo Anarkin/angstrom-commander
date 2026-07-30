@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using AngstromCommander.Server.Data;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Identity;
@@ -26,6 +27,7 @@ internal static class AuthEndpoints
 
                 return TypedResults.Ok(new RegisterResponse(user.Id));
             })
+            .ValidatesRequest<RegisterRequest>()
             .RequireRateLimiting(RateLimitPolicies.Authentication);
 
         app.MapPost(
@@ -61,6 +63,7 @@ internal static class AuthEndpoints
                 return TypedResults.Ok(new LoginResponse(tokens.CreateUserToken(user)));
             })
             .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ValidatesRequest<LoginRequest>()
             .RequireRateLimiting(RateLimitPolicies.Authentication);
 
         return app;
@@ -77,10 +80,19 @@ internal static class AuthEndpoints
     }
 }
 
-internal sealed record RegisterRequest(string Email, string Password);
+/// <summary>
+/// Lengths match the columns these land in, so an oversized value is a 400 from the endpoint
+/// rather than a 500 out of the database driver. The password cap is its own point: hashing is
+/// deliberately slow, and an unbounded password is free work for anyone who asks.
+/// </summary>
+internal sealed record RegisterRequest(
+    [property: Required][property: EmailAddress][property: StringLength(256)] string Email,
+    [property: Required][property: StringLength(128, MinimumLength = 1)] string Password);
 
 internal sealed record RegisterResponse(Guid UserId);
 
-internal sealed record LoginRequest(string Email, string Password);
+internal sealed record LoginRequest(
+    [property: Required][property: StringLength(256)] string Email,
+    [property: Required][property: StringLength(128)] string Password);
 
 internal sealed record LoginResponse(string AccessToken);

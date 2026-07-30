@@ -118,6 +118,15 @@ export interface paths {
                         "application/json": components["schemas"]["LoginResponse"];
                     };
                 };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["HttpValidationProblemDetails"];
+                    };
+                };
                 /** @description Unauthorized */
                 401: {
                     headers: {
@@ -172,7 +181,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/problem+json": components["schemas"]["ProblemDetails"];
+                        "application/problem+json": components["schemas"]["HttpValidationProblemDetails"];
                     };
                 };
             };
@@ -263,6 +272,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["ClaimResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["HttpValidationProblemDetails"];
                     };
                 };
                 /** @description Not Found */
@@ -357,6 +375,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["DaemonTokenResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["HttpValidationProblemDetails"];
                     };
                 };
             };
@@ -786,6 +813,11 @@ export interface components {
             detail?: null | string;
             instance?: null | string;
         };
+        /**
+         * @description Lengths match the columns these land in, so an oversized value is a 400 from the endpoint
+         *     rather than a 500 out of the database driver. The password cap is its own point: hashing is
+         *     deliberately slow, and an unbounded password is free work for anyone who asks.
+         */
         RegisterRequest: {
             email: string;
             password: string;

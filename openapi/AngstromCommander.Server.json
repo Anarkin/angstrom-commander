@@ -98,6 +98,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpValidationProblemDetails"
+                }
+              }
+            }
           }
         }
       }
@@ -133,7 +143,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
+                  "$ref": "#/components/schemas/HttpValidationProblemDetails"
                 }
               }
             }
@@ -211,6 +221,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpValidationProblemDetails"
+                }
+              }
+            }
           }
         }
       }
@@ -269,6 +289,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DaemonTokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpValidationProblemDetails"
                 }
               }
             }
@@ -681,9 +711,13 @@
         "type": "object",
         "properties": {
           "code": {
+            "maxLength": 16,
+            "minLength": 0,
             "type": "string"
           },
           "displayName": {
+            "maxLength": 200,
+            "minLength": 0,
             "type": "string"
           }
         }
@@ -812,9 +846,13 @@
         "type": "object",
         "properties": {
           "email": {
+            "maxLength": 256,
+            "minLength": 0,
             "type": "string"
           },
           "password": {
+            "maxLength": 128,
+            "minLength": 0,
             "type": "string"
           }
         }
@@ -930,12 +968,17 @@
         "type": "object",
         "properties": {
           "email": {
+            "maxLength": 256,
+            "minLength": 0,
             "type": "string"
           },
           "password": {
+            "maxLength": 128,
+            "minLength": 1,
             "type": "string"
           }
-        }
+        },
+        "description": "Lengths match the columns these land in, so an oversized value is a 400 from the endpoint\r\nrather than a 500 out of the database driver. The password cap is its own point: hashing is\r\ndeliberately slow, and an unbounded password is free work for anyone who asks."
       },
       "RegisterResponse": {
         "required": [
@@ -957,9 +1000,13 @@
         "type": "object",
         "properties": {
           "publicKeySpki": {
+            "maxLength": 1000,
+            "minLength": 0,
             "type": "string"
           },
           "platform": {
+            "maxLength": 200,
+            "minLength": 0,
             "type": "string"
           }
         }
@@ -980,6 +1027,8 @@
             "format": "uuid"
           },
           "signature": {
+            "maxLength": 512,
+            "minLength": 0,
             "type": "string"
           }
         }
