@@ -1,0 +1,6 @@
+{
+  "storage_account_name": "angstromtfstate",
+  "container_name": "tfstate",
+  "resource_group_name": "angstrom-commander-shared",
+  "key": "stamp-${AZURE_ENV_NAME}.tfstate"
+}

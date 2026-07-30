@@ -6,6 +6,7 @@
          TypeScript types are generated from it. CI fails if the committed file drifts. -->
     <OpenApiGenerateDocuments>true</OpenApiGenerateDocuments>
     <OpenApiDocumentsDirectory>$(MSBuildThisFileDirectory)../../openapi</OpenApiDocumentsDirectory>
+    <UserSecretsId>66a05252-e32d-45fb-80ee-9d4367d9c564</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>

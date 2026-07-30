@@ -42,4 +42,13 @@ curl -OJ -H "Authorization: Bearer <accessToken>" "http://localhost:5080/api/dae
 
 For working on the code, the [.NET 10 SDK](https://dotnet.microsoft.com/download) (`global.json` sets the floor and rolls forward to the newest 10.0 feature band installed) is enough: `dotnet test` builds everything and runs the test suites (integration tests start their own throwaway PostgreSQL via Testcontainers, so Docker must be running).
 
+## Deploying to Azure
+
+Environments are stamps: `azd env new <name>` + `azd provision` + `azd deploy` spawns a
+full isolated environment (Server on Container Apps at `api.<name>.angstrom.adamlengyel.com`,
+WebClient on Static Web Apps at `app.<name>.…`, its own managed PostgreSQL), and
+`azd down` deletes it whole. Prerequisites, the one-time bootstrap that already
+happened, and the one manual TLS step per new stamp are all in
+[infra/README.md](infra/README.md). The `test` environment is live.
+
 For the WebClient, Node.js 22+: `cd src/WebClient && npm ci && npm run dev` starts the dev server against the compose Server on <http://localhost:5080>; `npm test`, `npm run lint`, `npm run format:check`, and `npm run gen:api:check` mirror the CI gates. The Agent joins the compose setup once it exists; see ARCHITECTURE.md § Dev environment.

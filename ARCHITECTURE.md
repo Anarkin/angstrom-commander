@@ -109,12 +109,14 @@ Where the code actually is, as of July 2026 — a living list, so update it when
 - The API contract is generated (C# → `openapi/AngstromCommander.Server.json` → the WebClient's `schema.d.ts`), with CI failing on drift
 - Server and Daemon containers run as a non-root user
 - WebClient: sign in / register, claim a pairing code, machine list with online status, dual-pane browser with download, upload and copy between panes (both asking before they replace a file)
+- Azure deployment: `infra/` is real — a shared Terraform module (imported the hand-made resource group and DNS zone, added the container registry) plus the per-environment stamp driven by `azd`. The `test` stamp is live: Server on Container Apps behind `api.test.angstrom.adamlengyel.com` (managed TLS), WebClient on Static Web Apps behind `app.test.…`, managed PostgreSQL whose schema self-initialized via migrations on first boot, CORS verified across the real origins, and `terraform fmt`/`validate` gating every PR
 
-**Next, in order:** remaining file operations (mkdir, rename, delete, move) → MCP endpoint with PATs → OAuth + consent → Agent + model picker. Deploying to Azure (Terraform + `azd`) is orthogonal and can happen at any point; nothing is deployed yet.
+**Next, in order:** remaining file operations (mkdir, rename, delete, move) → MCP endpoint with PATs → OAuth + consent → Agent + model picker.
 
 **Known gaps, all deliberate:**
 
-- No `infra/` yet — nothing runs in Azure; the DNS zone above is the only provisioned resource
+- Provision and deploy run from a dev machine (`azd provision` / `azd deploy`); CI/CD deploys (`azd pipeline config`, OIDC) are not wired yet, and neither are per-PR demo stamps
+- Binding a stamp's `api.` managed TLS certificate is a one-time manual step after first provision (`az containerapp hostname bind`, see infra/README.md): the azurerm provider cannot create Container Apps managed certificates, so Terraform creates the unbound domain and thereafter ignores the binding
 - Sessions are stateless JWTs only: no sessions table, no refresh tokens, no "active sessions" page, and no unpair/revoke endpoint (`RevokedAt` exists in the schema but nothing sets it)
 - Rate limiting buckets callers by remote address, and the Server trusts `X-Forwarded-For` from any proxy because Container Apps' ingress address is not known ahead of time. That is only sound while the ingress is the sole route in — put the Server anywhere reachable directly and a caller can forge their own bucket
 - Downloads buffer into a browser Blob — fine for documents, wrong for very large files; the fix is a short-lived download ticket in the URL so the browser streams to disk
@@ -157,9 +159,11 @@ See the "Provisioning & deployment" diagram at the bottom for how the pieces fit
 - Environments are first-class: `azd env new <name>` + `azd up` spawns a full isolated env (test, qa, per-feature-branch demos, prod); one resource group per env; `azd down` tears it down. Prod is the same stamp with different variables (sizes/SKUs), never a hand-built special case
 - `azd up` is idempotent: per resource Terraform no-ops, updates in place, or (only for immutable attribute changes) destroys-and-recreates — the plan marks replacements explicitly. Manual portal edits are drift and get reverted on the next apply; the `.tf` files always win
 - Data safety: prod PostgreSQL gets a `prevent_destroy` lifecycle guard (blocks any destroying plan, incl. `azd down`); prod plans get human review before apply, demo envs may auto-apply
-- **Already provisioned by hand (July 2026) — Terraform must `import` these, never recreate them:**
-  - Resource group `angstrom-commander-shared` (West Europe), the home for cross-stamp resources (DNS, and the container registry when it exists)
-  - Azure DNS zone `angstrom.adamlengyel.com` in that group. The parent `adamlengyel.com` lives at an external registrar, where four NS records delegate this subdomain to Azure (`ns1-09.azure-dns.com`, `ns2-09.azure-dns.net`, `ns3-09.azure-dns.org`, `ns4-09.azure-dns.info`); delegation is live and verified. Terraform therefore creates per-environment records *inside* the zone without touching the registrar again
+- Promotion is by commit, not by artifact: promoting a build to qa/prod means deploying the same commit with that environment's variables, and rebuilding along the way is accepted — lockfiles and pinned package versions keep rebuilds equivalent, and it is what `azd`'s per-environment build-and-deploy flow does naturally. (If that ever changes, the WebClient's build-time server URL becomes the first blocker: identical bundles would need the URL supplied at deploy time.)
+- **Provisioned by hand (July 2026) — never recreate:**
+  - Resource group `angstrom-commander-shared` (West Europe), the home for cross-stamp resources (DNS, the container registry, Terraform state) — now imported and managed by `infra/shared`
+  - Storage account `angstromtfstate` in that group: holds every Terraform state file (blob versioning on), so it stays outside Terraform itself — `infra/README.md` records the bootstrap commands
+  - Azure DNS zone `angstrom.adamlengyel.com` in that group (also imported into `infra/shared` now). The parent `adamlengyel.com` lives at an external registrar, where four NS records delegate this subdomain to Azure (`ns1-09.azure-dns.com`, `ns2-09.azure-dns.net`, `ns3-09.azure-dns.org`, `ns4-09.azure-dns.info`); delegation is live and verified. Terraform therefore creates per-environment records *inside* the zone without touching the registrar again
   - Naming: prod is `api.angstrom.adamlengyel.com`, other stamps are `api.<env>.angstrom.adamlengyel.com`; the WebClient gets `app.` equivalents. The apex `adamlengyel.com` is an unrelated personal site and must be left alone
 
 ## Operating costs
@@ -188,6 +192,8 @@ Two things drive the bill, and neither is the resource list:
 
 - **The Server cannot sleep.** Daemons hold sockets open, so `minReplicas: 1` is required and prod pays 24/7. That is the direct price of the "no NAT, no port forwarding" promise. The idle rate is 8.5× cheaper on vCPU (memory costs the same either way) and applies to a replica that is *not processing requests*, but a live WebSocket plausibly counts as one — so budget the active rate and treat idle as upside (~$8/month instead of ~$28 if it ever applied).
 - **Egress scales with what users move.** Downloads and the outbound leg of a machine-to-machine copy leave Azure; inbound is free. 100 GB/month is free, so personal use is $0 — but 1 TB/month of relayed transfers is ~$78/month. That is the § Scaling P2P argument stated in currency.
+
+The test column's 12 h/day figure is an *assumption about usage, not something the stamp does by itself*: the standing test environment runs `minReplicas: 1` around the clock, so left alone it bills like the prod column (~$28 Server + ~$19 PostgreSQL ≈ $47/month) — the 12 h figure is what stopping it outside working hours would earn. The Terraform state storage account adds pennies (LRS, kilobytes of state).
 
 Levers: PostgreSQL on a standing free serverless tier (e.g. Neon, which scales to zero and is ample for this schema) takes prod to ~$34/month. Demo stamps cost almost nothing while no Daemon is paired to them — pair one and its reconnect loop keeps the environment awake, which removes the saving.
 

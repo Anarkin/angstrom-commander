@@ -68,6 +68,33 @@ jobs:
       - name: Build
         run: npm run build
 
+  terraform:
+    name: Terraform format and validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Verify formatting
+        run: terraform fmt -check -recursive
+
+      # -backend=false: validation needs providers, not state — CI has no Azure
+      # credentials and must not need any.
+      - name: Validate the stamp module
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Validate the shared module
+        working-directory: infra/shared
+        run: |
+          terraform init -backend=false
+          terraform validate
+
   compose:
     name: Images build and the stack comes up
     runs-on: ubuntu-latest

@@ -480,6 +480,16 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Terraform: local caches and any state that escaped the remote backend. The
+# dependency lock files (.terraform.lock.hcl) ARE committed.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+
+# azd environment directories (hold per-env values incl. secrets)
+.azure/
 # The Daemon's keypair and registration. Both spellings: Relay:StateDirectory defaults to a
 # relative "state", so it lands next to whatever directory the Daemon was started from.
 src/Daemon/state/

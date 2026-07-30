@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+name: angstrom-commander
+
+infra:
+  provider: terraform
+  path: infra
+
+services:
+  server:
+    project: src/Server
+    language: dotnet
+    host: containerapp
+    docker:
+      path: Dockerfile
+      # The Dockerfile copies the whole solution (Directory.Build.props, Protocol),
+      # so the build context is the repo root, same as docker-compose.
+      context: ../..
+
+  webclient:
+    project: src/WebClient
+    language: js
+    host: staticwebapp
+    dist: dist
+    hooks:
+      # Vite bakes the server URL in at build time; hand it the provisioned
+      # SERVER_URI so the bundle targets this azd environment's Server.
+      prepackage:
+        windows:
+          shell: pwsh
+          run: '"VITE_SERVER_URL=$env:SERVER_URI" | Out-File -Encoding utf8 .env.production.local'
+        posix:
+          shell: sh
+          run: 'echo "VITE_SERVER_URL=$SERVER_URI" > .env.production.local'
