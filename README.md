@@ -2,7 +2,7 @@
 
 All your machines, an ångström apart — a cloud-based dual-pane file manager with a Parsec-like model: a Daemon on each of your machines, one account managing them all from web or mobile, AI-operable from day one.
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — domain, components, tech stack, security model, diagrams
+- [ARCHITECTURE.md](ARCHITECTURE.md) — domain, components, tech stack, security model, scaling, operating costs, diagrams, and [what is built so far](ARCHITECTURE.md#implementation-status)
 - [AGENTS.md](AGENTS.md) — repo conventions and instructions for coding agents
 
 ## Setup

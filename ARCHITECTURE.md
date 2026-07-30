@@ -88,6 +88,33 @@ Diagrams: see the Diagrams section at the bottom.
 - Chat routing: WebClient/MobileClient never talk to the Agent directly — chat goes to the Server (existing JWT auth, single public origin), which forwards the session to the Agent and streams responses/confirmations back over the client's already-open SignalR connection. The Agent's endpoint is never publicly exposed
 - Fallback: the Agent is a plain container speaking MCP — if Foundry Agent Service disappoints (GA'd mid-2026), it runs on Container Apps instead with an infra-only change
 
+## Implementation status
+
+Where the code actually is, as of July 2026 — a living list, so update it when a row moves.
+
+**Working end to end** (locally, via `docker compose up`; verified with tests and by hand):
+
+- Guardrails and CI from the first commit: warnings-as-errors, analyzers, formatting and type-checked lint gates for both .NET and the WebClient, tests with coverage on every push
+- The relay: each Daemon holds one outbound SignalR connection; the Server routes requests down it. Socket lookup already sits behind `IDaemonConnectionRegistry`
+- Accounts (ASP.NET Core Identity, JWT), TV-style enrollment (pairing code → user claims it → registration), and Daemon connection tokens earned by signing a server challenge with the machine's private key
+- File operations: list, streamed download, streamed upload, and machine-to-machine copy — all chunked through one bounded channel, never buffered whole
+- Path sandbox with per-root read-only/writable flags
+- The API contract is generated (C# → `openapi/AngstromCommander.Server.json` → the WebClient's `schema.d.ts`), with CI failing on drift
+- WebClient: sign in / register, claim a pairing code, machine list with online status, dual-pane browser with download, upload and copy between panes
+
+**Next, in order:** remaining file operations (mkdir, rename, delete, move) → MCP endpoint with PATs → OAuth + consent → Agent + model picker. Deploying to Azure (Terraform + `azd`) is orthogonal and can happen at any point; nothing is deployed yet.
+
+**Known gaps, all deliberate:**
+
+- No `infra/` yet — nothing runs in Azure; the DNS zone above is the only provisioned resource
+- Sessions are stateless JWTs only: no sessions table, no refresh tokens, no "active sessions" page, and no unpair/revoke endpoint (`RevokedAt` exists in the schema but nothing sets it)
+- The anonymous enrollment endpoints have no rate limiting
+- Downloads buffer into a browser Blob — fine for documents, wrong for very large files; the fix is a short-lived download ticket in the URL so the browser streams to disk
+- No live-update channel for clients: panes refresh on navigation, and there is no transfer progress
+- The Daemon's private key sits unprotected on disk (no DPAPI/keychain/file-permission hardening) — must be addressed before any real install story
+- `MapOpenApi()` is not wired, so the contract exists only as a build artifact; there is no browsable API reference
+- The Server integration suite boots a factory per test (~11 s) and could share one
+
 ## Security model
 
 - TLS everywhere; WebClient and MobileClient authenticate with JWT access tokens + hashed refresh tokens (revocable per device)
@@ -115,6 +142,10 @@ See the "Provisioning & deployment" diagram at the bottom for how the pieces fit
 - Environments are first-class: `azd env new <name>` + `azd up` spawns a full isolated env (test, qa, per-feature-branch demos, prod); one resource group per env; `azd down` tears it down. Prod is the same stamp with different variables (sizes/SKUs), never a hand-built special case
 - `azd up` is idempotent: per resource Terraform no-ops, updates in place, or (only for immutable attribute changes) destroys-and-recreates — the plan marks replacements explicitly. Manual portal edits are drift and get reverted on the next apply; the `.tf` files always win
 - Data safety: prod PostgreSQL gets a `prevent_destroy` lifecycle guard (blocks any destroying plan, incl. `azd down`); prod plans get human review before apply, demo envs may auto-apply
+- **Already provisioned by hand (July 2026) — Terraform must `import` these, never recreate them:**
+  - Resource group `angstrom-commander-shared` (West Europe), the home for cross-stamp resources (DNS, and the container registry when it exists)
+  - Azure DNS zone `angstrom.adamlengyel.com` in that group. The parent `adamlengyel.com` lives at an external registrar, where four NS records delegate this subdomain to Azure (`ns1-09.azure-dns.com`, `ns2-09.azure-dns.net`, `ns3-09.azure-dns.org`, `ns4-09.azure-dns.info`); delegation is live and verified. Terraform therefore creates per-environment records *inside* the zone without touching the registrar again
+  - Naming: prod is `api.angstrom.adamlengyel.com`, other stamps are `api.<env>.angstrom.adamlengyel.com`; the WebClient gets `app.` equivalents. The apex `adamlengyel.com` is an unrelated personal site and must be left alone
 
 ## Operating costs
 
