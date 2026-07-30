@@ -56,9 +56,10 @@ Heavy emphasis on guardrails across the whole repo: every cheap, automatable qua
 Diagrams: see the Diagrams section at the bottom.
 
 **Daemon**
-- ASP.NET Core (Kestrel) — REST API over HTTPS for file ops (list, stat, copy/move/delete/rename, mkdir, streamed up/download)
-- SignalR (WebSockets) for real-time: directory change notifications, progress + cancel for long operations
-- Dials out to the Server via persistent outbound connection
+- Has no inbound API beyond a health probe, and never will: nothing may connect *to* a Daemon, which is what removes NAT, firewall and port-forwarding setup from the user's life. It is an ASP.NET Core host for its own lifecycle and health endpoint, and a SignalR **client** for everything else
+- Dials out to the Server, holds that one connection open, and answers the file operations pushed down it: list, stat, copy/move/delete/rename, mkdir, streamed up/download
+- Real-time travels the same way — directory change notifications and progress/cancel for long operations over the same connection, not a second channel
+- Every client-supplied path is sandboxed to the allowed roots before anything touches the file system (see § Security model)
 
 **Server**
 - Relays traffic between clients (WebClient, MobileClient, MCP clients incl. the Agent) and Daemons over the Daemons' outbound connections:
@@ -69,7 +70,7 @@ Diagrams: see the Diagrams section at the bottom.
   - File transfers stream through in chunks (never buffered whole); bulk transfers may get a second dedicated connection later
   - Every transfer is one bounded channel with a single writer and reader, which is what makes the dual pane's copy cheap: source Daemon → Server → target Daemon with no client round trip. A download is that channel read by the HTTP response, an upload is it written by the HTTP request. Backpressure is inherent — a slow reader slows the sender. (Note SignalR cannot push a stream to a client, so a receiving Daemon is told a transfer is waiting and pulls it.)
 - MCP endpoint — the file-op tool surface exposed as a remote MCP server (Streamable HTTP, e.g. `api.<domain>.com/mcp`):
-  - Same authorized, relayed, sandboxed ops as the REST API — MCP is a protocol adapter over one tool surface, never a second implementation
+  - Same authorized, relayed, sandboxed ops as the Server's REST API — MCP is a protocol adapter over one tool surface, never a second implementation
   - Auth: OAuth 2.1 (authorization code + PKCE, dynamic client registration; OpenIddict) with Angstrom Commander login + consent pages; personal access tokens as the simpler first step. Both land in the sessions table (see the DB bullets below)
   - Consequence: any MCP client (Claude Code, Claude Desktop, ChatGPT, …) can operate the user's machines using the user's own AI subscription — third-party agents get no special access path
 - DB stores coordination metadata only:
@@ -227,7 +228,7 @@ flowchart TB
   end
 
   subgraph machines["User's machines — × N: laptop, PC, home server, container"]
-    daemon["Daemon<br/>.NET 10, ASP.NET Core (Kestrel)<br/><i>file ops: list/stat/copy/move/delete/<br/>rename/mkdir, streamed up/download;<br/>path-sandboxed to allowed roots</i>"]
+    daemon["Daemon<br/>.NET 10, SignalR client — no inbound API<br/><i>answers relayed file ops: list/stat/copy/<br/>move/delete/rename/mkdir, streamed<br/>up/download; path-sandboxed to<br/>allowed roots</i>"]
   end
 
   user --> web
