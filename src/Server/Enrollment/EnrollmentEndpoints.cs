@@ -93,15 +93,16 @@ internal static class EnrollmentEndpoints
                     return TypedResults.Unauthorized();
                 }
 
-                var pairingCode = await db.PairingCodes
+                var now = DateTimeOffset.UtcNow;
+                await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+
+                var pairingCode = await db.PairingCodes.AsNoTracking()
                     .FirstOrDefaultAsync(c => c.Code == request.Code, cancellationToken);
                 if (pairingCode is null
                     || pairingCode.ClaimedRegistrationId is not null
-                    || pairingCode.ExpiresAt < DateTimeOffset.UtcNow)
+                    || pairingCode.ExpiresAt < now)
                 {
-                    return TypedResults.Problem(
-                        detail: "Unknown, expired or already-used pairing code.",
-                        statusCode: StatusCodes.Status404NotFound);
+                    return UnusableCode();
                 }
 
                 var registration = new DaemonRegistration
@@ -111,11 +112,26 @@ internal static class EnrollmentEndpoints
                     DisplayName = request.DisplayName,
                     PublicKeySpki = pairingCode.PublicKeySpki,
                     Platform = pairingCode.Platform,
-                    CreatedAt = DateTimeOffset.UtcNow,
+                    CreatedAt = now,
                 };
+
+                // The read above cannot decide this on its own: two requests racing on one code
+                // both pass it, and the loser would pair the same machine a second time. Only the
+                // request whose update still finds the code unclaimed goes on to register, and the
+                // whole thing is one transaction so a burned code never outlives its registration.
+                var claimed = await db.PairingCodes
+                    .Where(c => c.Code == request.Code && c.ClaimedRegistrationId == null && c.ExpiresAt >= now)
+                    .ExecuteUpdateAsync(
+                        setters => setters.SetProperty(c => c.ClaimedRegistrationId, registration.Id),
+                        cancellationToken);
+                if (claimed == 0)
+                {
+                    return UnusableCode();
+                }
+
                 db.DaemonRegistrations.Add(registration);
-                pairingCode.ClaimedRegistrationId = registration.Id;
                 await db.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
 
                 return TypedResults.Ok(new ClaimResponse(registration.Id, registration.DisplayName));
             })
@@ -124,6 +140,17 @@ internal static class EnrollmentEndpoints
             .RequireAuthorization(AuthPolicies.User);
 
         return app;
+    }
+
+    /// <summary>
+    /// One answer for every unusable code — unknown, expired, or already claimed — so a stranger
+    /// cannot sit on the endpoint and learn which codes are live.
+    /// </summary>
+    private static ProblemHttpResult UnusableCode()
+    {
+        return TypedResults.Problem(
+            detail: "Unknown, expired or already-used pairing code.",
+            statusCode: StatusCodes.Status404NotFound);
     }
 }
 

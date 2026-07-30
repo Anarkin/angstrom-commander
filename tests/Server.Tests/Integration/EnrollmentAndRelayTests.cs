@@ -141,6 +141,40 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task OneCodeClaimedManyTimesAtOncePairsTheMachineExactlyOnce()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+
+        using var userClient = factory.CreateClient();
+        var userToken = await RegisterAndLoginAsync(userClient, "racer@example.com");
+        userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var publicKeySpki = Convert.ToBase64String(key.ExportSubjectPublicKeyInfo());
+        using var daemonClient = factory.CreateClient();
+        var pairing = await PostAsync<PairingResponse>(
+            daemonClient, "/api/enrollment/code", new { publicKeySpki, platform = "TestOS" });
+
+        // Everyone reads "unclaimed" before anyone writes, so without a conditional update the
+        // same machine ends up registered several times over.
+        var attempts = await Task.WhenAll(Enumerable.Range(0, 8).Select(attempt =>
+            userClient.PostAsJsonAsync(
+                "/api/enrollment/claim",
+                new { code = pairing.Code, displayName = $"Racer {attempt}" })));
+
+        try
+        {
+            Assert.Single(attempts, static attempt => attempt.IsSuccessStatusCode);
+            var machines = await GetAsync<List<MachineResponse>>(userClient, new Uri("/api/daemons", UriKind.Relative));
+            Assert.Single(machines);
+        }
+        finally
+        {
+            Array.ForEach(attempts, static attempt => attempt.Dispose());
+        }
+    }
+
+    [Fact]
     public async Task TokenOfDeletedUserGetsUnauthorizedNotServerError()
     {
         using var factory = new ServerFactory(postgres.ConnectionString);
