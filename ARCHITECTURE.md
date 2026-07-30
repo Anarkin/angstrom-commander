@@ -116,6 +116,32 @@ See the "Provisioning & deployment" diagram at the bottom for how the pieces fit
 - `azd up` is idempotent: per resource Terraform no-ops, updates in place, or (only for immutable attribute changes) destroys-and-recreates — the plan marks replacements explicitly. Manual portal edits are drift and get reverted on the next apply; the `.tf` files always win
 - Data safety: prod PostgreSQL gets a `prevent_destroy` lifecycle guard (blocks any destroying plan, incl. `azd down`); prod plans get human review before apply, demo envs may auto-apply
 
+## Operating costs
+
+> **Estimated July 2026, West Europe. Keep this current** — re-check it whenever the hosting choices, SKUs, or replica counts change, and refresh the rates periodically even when nothing changes: Azure prices drift, and a stale table here is more misleading than no table. Same living-document rule as the rest of this file. Only permanent free allowances are counted (never new-customer trials, which expire and would make the numbers lie later).
+
+Assumes Container Apps *active* billing rates, one enrolled Daemon, and light personal traffic. The free grant of 180,000 vCPU-seconds + 360,000 GiB-seconds is **per subscription per month** and shared by every environment, so it is applied to prod below and the other environments pay from their first second.
+
+| Component | prod (always on) | test (12 h/day ≈ 365 h) | demo123 (3-day stamp, ~2 h used) |
+| --- | --- | --- | --- |
+| **Server** — Container Apps, 0.25 vCPU / 0.5 GiB | ~$14 (730 h, grant applied) | ~$10 | ~$0.05 (scales to zero) |
+| **PostgreSQL** | Flexible Server B1ms + 32 GiB: ~$16 | containerized in the stamp, same hours: ~$10 (data resets when it scales down; a second database on prod's server is free but shares a server with prod) | containerized: ~$2 |
+| **WebClient** — Static Web Apps, free tier | $0 | $0 | $0 |
+| **Container Registry** — ACR Basic | ~$5 (shared by all stamps) | shared | shared |
+| **DNS zone** | ~$0.50 (shared) | shared | shared |
+| **Log Analytics** — 5 GB/month included | $0–3 | $0 | $0 |
+| **Egress** — first 100 GB/month free, then ~$0.087/GB | $0 at light use | $0 | $0 |
+| **Agent / LLM tokens** — pay-per-token, per-user caps | $0 until the Agent ships | — | — |
+| **Redis** — only once the Server runs >1 replica | $0 today, ~$16 when needed | — | — |
+| **Total** | **~$36/month** | **~$20/month** | **~$2 for its whole life** |
+
+Two things drive the bill, and neither is the resource list:
+
+- **The Server cannot sleep.** Daemons hold sockets open, so `minReplicas: 1` is required and prod pays 24/7. That is the direct price of the "no NAT, no port forwarding" promise. Idle billing rates (8× cheaper on vCPU) would apply to a replica that is *not processing requests*, but a live WebSocket plausibly counts as one — so budget the active rate and treat idle as upside.
+- **Egress scales with what users move.** Downloads and the outbound leg of a machine-to-machine copy leave Azure; inbound is free. 100 GB/month is free, so personal use is $0 — but 1 TB/month of relayed transfers is ~$78/month. That is the § Scaling P2P argument stated in currency.
+
+Levers: PostgreSQL on a standing free serverless tier (e.g. Neon, which scales to zero and is ample for this schema) takes prod to ~$20/month. Demo stamps cost almost nothing while no Daemon is paired to them — pair one and its reconnect loop keeps the environment awake, which removes the saving.
+
 ## Source control & CI/CD
 
 - GitHub hosts the repo: <https://github.com/Anarkin/angstrom-commander> (private, personal account — free tier is ample for solo, incl. 2,000 Actions minutes/month)
