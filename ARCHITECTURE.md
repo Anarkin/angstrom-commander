@@ -212,6 +212,7 @@ One discount is deliberately left out of the figures above: Container Apps inclu
 
 - When the direct P2P connection upgrade ships — not whether (see § Scaling: relay egress cost makes it an economic requirement at scale, though not for v1)
 - Which LLMs earn a slot in the curated model picker at launch (tool-calling quality varies widely across the Foundry catalog); per-model SDK: Claude via the official `Anthropic.Foundry` .NET SDK, others via the OpenAI-compatible surface
+
 ## Diagrams
 
 ### Containers
@@ -266,7 +267,7 @@ sequenceDiagram
   C->>S: HTTPS: list C:\Projects on Daemon #42 (JWT)
   S->>S: Authorize: Daemon #42 belongs to this user? Socket connected?
   S->>A: Push over the open socket: {id: abc123, op: list, path: C:\Projects}
-  A->>A: Sandbox check (canonicalize, allowed roots), read dir
+  A->>A: Sandbox check (canonicalize, resolve links, allowed roots), read dir
   A->>S: {id: abc123, result: [entries]}
   S->>C: HTTPS response: [entries]
   Note over C,S: Correlation IDs multiplex many concurrent ops over one socket.<br/>Large file transfers stream through in chunks — the Server never buffers a whole file.
@@ -284,9 +285,15 @@ sequenceDiagram
   A->>S: Request pairing code (sends public key)
   S-->>A: Short-lived one-time code
   A->>A: Display code to user
+  loop Every few seconds, until claimed or expired
+    A->>S: Has this code been claimed?
+    S-->>A: Not yet
+  end
   C->>S: User enters code
-  S->>S: Bind registration: this Daemon → this account
-  S-->>A: Enrolled — future connects authenticate by signing a challenge with the private key
+  S->>S: Bind registration: this Daemon → this account, in one atomic claim
+  A->>S: Has this code been claimed?
+  S-->>A: Yes — here is your registration id
+  Note over A,S: The Daemon asks, because nothing can connect to it yet.<br/>Future connects authenticate by signing a challenge with the private key.
 ```
 
 ### AI assistant flow — "organize this folder"

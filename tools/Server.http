@@ -78,6 +78,13 @@ Content-Type: application/octet-stream
 
 nope
 
+### Without overwrite, an existing file is left alone → 400 (send #7 first)
+POST {{server}}/api/daemons/{{registrationId}}/upload?path=/uploads/hello.txt
+Authorization: Bearer {{token}}
+Content-Type: application/octet-stream
+
+should not land
+
 ### Confirm the upload landed
 GET {{server}}/api/daemons/{{registrationId}}/list?path=/uploads
 Authorization: Bearer {{token}}
@@ -95,7 +102,7 @@ Authorization: Bearer {{token}}
 GET {{server}}/api/daemons/{{registrationId}}/download?path=/state/daemon.key
 Authorization: Bearer {{token}}
 
-### Traversal is canonicalized before the root check (400 when only /data is allowed)
+### Traversal is canonicalized before the root check → 400
 GET {{server}}/api/daemons/{{registrationId}}/list?path=/data/../etc
 Authorization: Bearer {{token}}
 
