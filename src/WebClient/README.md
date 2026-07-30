@@ -6,16 +6,16 @@ full picture.
 
 ## Commands
 
-| Command                | Does                                              |
-| ---------------------- | ------------------------------------------------- |
-| `npm run dev`          | Dev server (talks to the Server from compose)     |
-| `npm test`             | Vitest + React Testing Library                    |
-| `npm run lint`         | ESLint (type-checked rules), warnings are errors  |
-| `npm run format`       | Prettier                                          |
-| `npm run format:check` | The CI formatting gate                            |
-| `npm run build`        | Type-checks (`tsc -b`) and builds the prod bundle |
-| `npm run gen:api`      | Regenerates `src/serverApi/schema.d.ts` from the contract |
-| `npm run gen:api:check`| The CI drift gate for those generated types       |
+| Command                 | Does                                                      |
+| ----------------------- | --------------------------------------------------------- |
+| `npm run dev`           | Dev server (talks to the Server from compose)             |
+| `npm test`              | Vitest + React Testing Library                            |
+| `npm run lint`          | ESLint (type-checked rules), warnings are errors          |
+| `npm run format`        | Prettier                                                  |
+| `npm run format:check`  | The CI formatting gate                                    |
+| `npm run build`         | Type-checks (`tsc -b`) and builds the prod bundle         |
+| `npm run gen:api`       | Regenerates `src/serverApi/schema.d.ts` from the contract |
+| `npm run gen:api:check` | The CI drift gate for those generated types               |
 
 ## API types are generated
 
