@@ -19,7 +19,7 @@ The five products we build and ship (infrastructure like the DB is listed with i
 4. **MobileClient** — iPhone + Android.
 5. **Agent** — the built-in AI assistant's agent loop. Cloud-hosted, never on the user's machines.
 
-Besides the products, the repo carries supporting codebases — authored and reviewed like code, but not shipped to anyone: `infra/` (Terraform + azd definitions of the Azure environments) and `.github/workflows/` (GitHub Actions CI/CD).
+Besides the products, the repo carries supporting codebases — authored and reviewed like code, but not shipped to anyone: `.github/workflows/` (GitHub Actions CI/CD), and `infra/` (Terraform + azd definitions of the Azure environments) once it is written.
 
 ## Tech stack
 
