@@ -75,6 +75,7 @@ Diagrams: see the Diagrams section at the bottom.
   - Short-lived one-time enrollment (pairing) codes
 - NOT in the DB: file data/metadata, the Daemon's FS config (allowed roots, and whether each is writable, are Daemon-side), and ephemeral state (Daemon online-status, active relay sessions live in memory/Redis)
 - Reached via fixed DNS name (e.g. `api.<domain>.com`); environments = subdomains (`api.qa...`); feature-branch demos use Azure's auto-generated Container Apps URLs
+- The WebClient is a different origin from the API (`app.` vs `api.`), so each environment names its WebClient origin in `Cors:AllowedOrigins` — empty by default, so an environment that has not been told refuses browsers rather than accepting any origin. Behind Container Apps' ingress the Server trusts `X-Forwarded-For`/`-Proto`, without which every caller would look like the proxy and share one rate-limit bucket
 
 **WebClient & MobileClient**
 - Configurable server URL (build config in WebClient, build flavor/hidden setting in MobileClient) so any build can target any environment

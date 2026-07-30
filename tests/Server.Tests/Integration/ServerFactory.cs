@@ -16,13 +16,33 @@ internal sealed class ServerFactory(string connectionString) : WebApplicationFac
     /// </summary>
     public int AuthenticationPermitsPerMinute { get; init; } = 10_000;
 
+    /// <summary>
+    /// Which environment to boot as, for the behaviour that differs outside Development. Left
+    /// alone by default so the rest of the suite keeps whatever the test host picks.
+    /// </summary>
+    public string? Environment { get; init; }
+
+    /// <summary>Browser origins allowed to call the API; only consulted outside Development.</summary>
+    public IReadOnlyList<string> AllowedOrigins { get; init; } = [];
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        if (this.Environment is not null)
+        {
+            builder.UseEnvironment(this.Environment);
+        }
+
         builder.UseSetting("ConnectionStrings:Database", connectionString);
         builder.UseSetting("Database:MigrateOnStartup", "true");
         builder.UseSetting("Auth:JwtSigningKey", SigningKey);
         builder.UseSetting(
             "RateLimiting:AuthenticationPermitsPerMinute",
             this.AuthenticationPermitsPerMinute.ToString(CultureInfo.InvariantCulture));
+
+        for (var index = 0; index < this.AllowedOrigins.Count; index++)
+        {
+            builder.UseSetting(
+                $"Cors:AllowedOrigins:{index.ToString(CultureInfo.InvariantCulture)}", this.AllowedOrigins[index]);
+        }
     }
 }

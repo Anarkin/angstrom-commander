@@ -4,6 +4,7 @@ using AngstromCommander.Server.Data;
 using AngstromCommander.Server.Enrollment;
 using AngstromCommander.Server.Relay;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -14,8 +15,41 @@ var builder = WebApplication.CreateBuilder(args);
 // (~1.37x) over the JSON protocol, so give stream items generous headroom.
 builder.Services.AddSignalR(static options => options.MaximumReceiveMessageSize = 512 * 1024);
 builder.Services.AddMemoryCache();
-builder.Services.AddCors();
 builder.Services.AddOpenApi();
+
+// Behind Azure Container Apps' ingress the connection the Server sees is the proxy's, so without
+// this the caller address every rate-limit bucket keys on is the same one for everybody, and the
+// scheme is http even though the client arrived over TLS.
+builder.Services.Configure<ForwardedHeadersOptions>(static options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+
+    // The ingress address is assigned by the platform, so the default loopback-only allow-list
+    // would discard the headers. Nothing reaches the Server except through that ingress.
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+});
+
+// The WebClient is served from its own origin (app.<domain> against api.<domain> in a real
+// environment, a different port in local dev), so it is cross-origin everywhere.
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
+{
+    if (builder.Environment.IsDevelopment())
+    {
+        policy.AllowAnyOrigin();
+    }
+    else
+    {
+        // Named explicitly, and empty by default: an environment that has not been told its
+        // WebClient origin refuses browsers rather than opening up to any of them.
+        policy.WithOrigins(allowedOrigins);
+    }
+
+    // Tokens travel in the Authorization header, so no cookies and no credentials are involved.
+    // Content-Disposition has to be exposed or the browser hides the downloaded file's name.
+    policy.AllowAnyHeader().AllowAnyMethod().WithExposedHeaders("Content-Disposition");
+}));
 builder.Services.AddSingleton<IDaemonConnectionRegistry, InMemoryDaemonConnectionRegistry>();
 builder.Services.AddSingleton<FileTransferRegistry>();
 
@@ -81,13 +115,16 @@ builder.Services.AddHostedService<DatabaseMigrator>();
 
 var app = builder.Build();
 
-if (app.Environment.IsDevelopment())
+// First in the pipeline: everything downstream that cares who the caller is — the rate limiter
+// above all — has to see the real address rather than the proxy's.
+app.UseForwardedHeaders();
+
+if (!app.Environment.IsDevelopment())
 {
-    // Lets local dev pages (e.g. the future WebClient dev server) call the API from
-    // another origin. Development only — never in real environments.
-    app.UseCors(static policy => policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
+    app.UseHsts();
 }
 
+app.UseCors();
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -101,8 +138,8 @@ app.MapRelayEndpoints();
 
 await app.RunAsync();
 
-// One bucket per caller address. Behind a reverse proxy this needs UseForwardedHeaders to be in
-// front of it, or every caller shares the proxy's address and one bucket.
+// One bucket per caller address, which UseForwardedHeaders has already resolved to the real
+// client rather than the ingress in front of it.
 static RateLimitPartition<string> PartitionByCaller(HttpContext http, int permitsPerMinute)
 {
     return RateLimitPartition.GetFixedWindowLimiter(
