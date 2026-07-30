@@ -11,11 +11,26 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "gen:api": "openapi-typescript ../../openapi/AngstromCommander.Server.json -o src/serverApi/schema.d.ts",
+    "gen:api:check": "node scripts/check-api-types.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
+  },
+  "comments": {
+    "overrides": [
+      "openapi-typescript still declares a TypeScript ^5 peer; it works with 6.x.",
+      "brace-expansion: patched version for GHSA-mh99-v99m-4gvg, reached transitively via",
+      "openapi-typescript -> @redocly/openapi-core (whose 1.x line has no fixed release)."
+    ]
+  },
+  "overrides": {
+    "openapi-typescript": {
+      "typescript": "$typescript"
+    },
+    "brace-expansion": "^5.0.8"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -32,6 +47,7 @@
     "eslint-plugin-react-refresh": "^0.5.3",
     "globals": "^17.8.0",
     "jsdom": "^30.0.1",
+    "openapi-typescript": "^7.13.0",
     "prettier": "^3.9.6",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.65.0",

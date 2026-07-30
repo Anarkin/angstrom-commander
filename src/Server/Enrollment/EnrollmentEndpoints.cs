@@ -1,5 +1,6 @@
 using AngstromCommander.Server.Auth;
 using AngstromCommander.Server.Data;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
 
 namespace AngstromCommander.Server.Enrollment;
@@ -13,11 +14,16 @@ internal static class EnrollmentEndpoints
         // Called by an enrolling Daemon (it has no identity yet, so this is anonymous).
         app.MapPost(
             "/api/enrollment/code",
-            static async (RequestCodeRequest request, AppDbContext db, CancellationToken cancellationToken) =>
+            static async Task<Results<Ok<PairingCodeResponse>, ProblemHttpResult>> (
+                RequestCodeRequest request,
+                AppDbContext db,
+                CancellationToken cancellationToken) =>
             {
                 if (!PublicKeys.TryImportSpki(request.PublicKeySpki, out var key))
                 {
-                    return Results.BadRequest(new { error = "publicKeySpki is not a valid base64 SubjectPublicKeyInfo." });
+                    return TypedResults.Problem(
+                        detail: "publicKeySpki is not a valid base64 SubjectPublicKeyInfo.",
+                        statusCode: StatusCodes.Status400BadRequest);
                 }
 
                 key.Dispose();
@@ -41,30 +47,38 @@ internal static class EnrollmentEndpoints
                 db.PairingCodes.Add(code);
                 await db.SaveChangesAsync(cancellationToken);
 
-                return Results.Ok(new { code = code.Code, expiresAt = code.ExpiresAt });
-            });
+                return TypedResults.Ok(new PairingCodeResponse(code.Code, code.ExpiresAt));
+            })
+            .ProducesProblem(StatusCodes.Status400BadRequest);
 
         // Polled by the enrolling Daemon while its code is displayed to the user.
         app.MapGet(
             "/api/enrollment/status/{code}",
-            static async (string code, AppDbContext db, CancellationToken cancellationToken) =>
+            static async Task<Results<Ok<EnrollmentStatusResponse>, NoContent, NotFound>> (
+                string code,
+                AppDbContext db,
+                CancellationToken cancellationToken) =>
             {
                 var pairingCode = await db.PairingCodes.AsNoTracking()
                     .FirstOrDefaultAsync(c => c.Code == code, cancellationToken);
                 if (pairingCode is null || (pairingCode.ClaimedRegistrationId is null && pairingCode.ExpiresAt < DateTimeOffset.UtcNow))
                 {
-                    return Results.NotFound();
+                    return TypedResults.NotFound();
                 }
 
                 return pairingCode.ClaimedRegistrationId is Guid registrationId
-                    ? Results.Ok(new { registrationId })
-                    : Results.NoContent();
+                    ? TypedResults.Ok(new EnrollmentStatusResponse(registrationId))
+                    : TypedResults.NoContent();
             });
 
         // Called by a logged-in user typing in the code the Daemon displayed.
         app.MapPost(
             "/api/enrollment/claim",
-            static async (ClaimRequest request, HttpContext http, AppDbContext db, CancellationToken cancellationToken) =>
+            static async Task<Results<Ok<ClaimResponse>, UnauthorizedHttpResult, ProblemHttpResult>> (
+                ClaimRequest request,
+                HttpContext http,
+                AppDbContext db,
+                CancellationToken cancellationToken) =>
             {
                 var userId = Guid.Parse(http.User.FindFirst(AuthClaims.Subject)!.Value);
 
@@ -72,7 +86,7 @@ internal static class EnrollmentEndpoints
                 // that's an auth failure, not a 500-worthy FK violation.
                 if (!await db.Users.AnyAsync(u => u.Id == userId, cancellationToken))
                 {
-                    return Results.Unauthorized();
+                    return TypedResults.Unauthorized();
                 }
 
                 var pairingCode = await db.PairingCodes
@@ -81,7 +95,9 @@ internal static class EnrollmentEndpoints
                     || pairingCode.ClaimedRegistrationId is not null
                     || pairingCode.ExpiresAt < DateTimeOffset.UtcNow)
                 {
-                    return Results.NotFound(new { error = "Unknown, expired or already-used pairing code." });
+                    return TypedResults.Problem(
+                        detail: "Unknown, expired or already-used pairing code.",
+                        statusCode: StatusCodes.Status404NotFound);
                 }
 
                 var registration = new DaemonRegistration
@@ -97,8 +113,9 @@ internal static class EnrollmentEndpoints
                 pairingCode.ClaimedRegistrationId = registration.Id;
                 await db.SaveChangesAsync(cancellationToken);
 
-                return Results.Ok(new { registrationId = registration.Id, displayName = registration.DisplayName });
+                return TypedResults.Ok(new ClaimResponse(registration.Id, registration.DisplayName));
             })
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireAuthorization(AuthPolicies.User);
 
         return app;
@@ -107,4 +124,10 @@ internal static class EnrollmentEndpoints
 
 internal sealed record RequestCodeRequest(string PublicKeySpki, string Platform);
 
+internal sealed record PairingCodeResponse(string Code, DateTimeOffset ExpiresAt);
+
+internal sealed record EnrollmentStatusResponse(Guid RegistrationId);
+
 internal sealed record ClaimRequest(string Code, string DisplayName);
+
+internal sealed record ClaimResponse(Guid RegistrationId, string DisplayName);

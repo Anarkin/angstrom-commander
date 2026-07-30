@@ -14,6 +14,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSignalR(static options => options.MaximumReceiveMessageSize = 512 * 1024);
 builder.Services.AddMemoryCache();
 builder.Services.AddCors();
+builder.Services.AddOpenApi();
 builder.Services.AddSingleton<IDaemonConnectionRegistry, InMemoryDaemonConnectionRegistry>();
 builder.Services.AddSingleton<FileTransferRegistry>();
 
@@ -58,14 +59,10 @@ builder.Services.AddAuthorizationBuilder()
     .AddPolicy(AuthPolicies.User, static policy => policy.RequireClaim(AuthClaims.TokenType, AuthClaims.UserTokenType))
     .AddPolicy(AuthPolicies.Daemon, static policy => policy.RequireClaim(AuthClaims.TokenType, AuthClaims.DaemonTokenType));
 
-var app = builder.Build();
-
 // Fresh environments self-initialize their schema (ARCHITECTURE.md § Tech stack).
-if (app.Configuration.GetValue("Database:MigrateOnStartup", defaultValue: true))
-{
-    using var scope = app.Services.CreateScope();
-    await scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.MigrateAsync();
-}
+builder.Services.AddHostedService<DatabaseMigrator>();
+
+var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
 {

@@ -28,6 +28,10 @@ jobs:
       - name: Test with coverage
         run: dotnet test --configuration Release --no-build --collect:"XPlat Code Coverage"
 
+      # The OpenAPI contract is a build output; the build above regenerated it.
+      - name: Verify the committed OpenAPI contract is current
+        run: git diff --exit-code -- openapi/
+
   webclient:
     name: WebClient lint, format, test, build
     runs-on: ubuntu-latest
@@ -45,6 +49,9 @@ jobs:
 
       - name: Install
         run: npm ci
+
+      - name: Verify the generated API types match the contract
+        run: npm run gen:api:check
 
       - name: Lint (type-aware, warnings are errors)
         run: npm run lint

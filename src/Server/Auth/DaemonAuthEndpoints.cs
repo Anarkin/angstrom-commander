@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using AngstromCommander.Server.Data;
 using AngstromCommander.Server.Enrollment;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 
@@ -14,27 +15,36 @@ internal static class DaemonAuthEndpoints
     {
         app.MapPost(
             "/api/daemon-auth/challenge",
-            static async (ChallengeRequest request, AppDbContext db, IMemoryCache cache, CancellationToken cancellationToken) =>
+            static async Task<Results<Ok<ChallengeResponse>, NotFound>> (
+                ChallengeRequest request,
+                AppDbContext db,
+                IMemoryCache cache,
+                CancellationToken cancellationToken) =>
             {
                 var registration = await db.DaemonRegistrations.AsNoTracking().FirstOrDefaultAsync(
                     r => r.Id == request.RegistrationId && r.RevokedAt == null, cancellationToken);
                 if (registration is null)
                 {
-                    return Results.NotFound();
+                    return TypedResults.NotFound();
                 }
 
                 var nonce = RandomNumberGenerator.GetBytes(32);
                 cache.Set(NonceCacheKey(request.RegistrationId), nonce, NonceLifetime);
-                return Results.Ok(new { nonce = Convert.ToBase64String(nonce) });
+                return TypedResults.Ok(new ChallengeResponse(Convert.ToBase64String(nonce)));
             });
 
         app.MapPost(
             "/api/daemon-auth/token",
-            static async (TokenRequest request, AppDbContext db, IMemoryCache cache, TokenService tokens, CancellationToken cancellationToken) =>
+            static async Task<Results<Ok<DaemonTokenResponse>, UnauthorizedHttpResult>> (
+                TokenRequest request,
+                AppDbContext db,
+                IMemoryCache cache,
+                TokenService tokens,
+                CancellationToken cancellationToken) =>
             {
                 if (!cache.TryGetValue<byte[]>(NonceCacheKey(request.RegistrationId), out var nonce) || nonce is null)
                 {
-                    return Results.Unauthorized();
+                    return TypedResults.Unauthorized();
                 }
 
                 cache.Remove(NonceCacheKey(request.RegistrationId));
@@ -43,7 +53,7 @@ internal static class DaemonAuthEndpoints
                     r => r.Id == request.RegistrationId && r.RevokedAt == null, cancellationToken);
                 if (registration is null || !PublicKeys.TryImportSpki(registration.PublicKeySpki, out var key))
                 {
-                    return Results.Unauthorized();
+                    return TypedResults.Unauthorized();
                 }
 
                 using (key)
@@ -55,16 +65,16 @@ internal static class DaemonAuthEndpoints
                     }
                     catch (FormatException)
                     {
-                        return Results.Unauthorized();
+                        return TypedResults.Unauthorized();
                     }
 
                     if (!key.VerifyData(nonce, signature, HashAlgorithmName.SHA256))
                     {
-                        return Results.Unauthorized();
+                        return TypedResults.Unauthorized();
                     }
                 }
 
-                return Results.Ok(new { accessToken = tokens.CreateDaemonToken(request.RegistrationId) });
+                return TypedResults.Ok(new DaemonTokenResponse(tokens.CreateDaemonToken(request.RegistrationId)));
             });
 
         return app;
@@ -78,4 +88,8 @@ internal static class DaemonAuthEndpoints
 
 internal sealed record ChallengeRequest(Guid RegistrationId);
 
+internal sealed record ChallengeResponse(string Nonce);
+
 internal sealed record TokenRequest(Guid RegistrationId, string Signature);
+
+internal sealed record DaemonTokenResponse(string AccessToken);

@@ -6,7 +6,8 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "coverage"] },
+  // schema.d.ts is generated from the Server's OpenAPI contract (npm run gen:api).
+  { ignores: ["dist", "coverage", "src/serverApi/schema.d.ts"] },
   {
     files: ["**/*.{ts,tsx}"],
     extends: [

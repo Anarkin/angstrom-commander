@@ -1,6 +1,7 @@
 using AngstromCommander.Protocol;
 using AngstromCommander.Server.Auth;
 using AngstromCommander.Server.Data;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
@@ -16,7 +17,11 @@ internal static class RelayEndpoints
         // The caller's machine list, with live connection status.
         app.MapGet(
             "/api/daemons",
-            static async (HttpContext http, AppDbContext db, IDaemonConnectionRegistry registry, CancellationToken cancellationToken) =>
+            static async Task<Ok<IReadOnlyList<MachineResponse>>> (
+                HttpContext http,
+                AppDbContext db,
+                IDaemonConnectionRegistry registry,
+                CancellationToken cancellationToken) =>
             {
                 var userId = GetUserId(http);
                 var registrations = await db.DaemonRegistrations.AsNoTracking()
@@ -24,21 +29,23 @@ internal static class RelayEndpoints
                     .OrderBy(static r => r.CreatedAt)
                     .ToListAsync(cancellationToken);
 
-                return Results.Ok(registrations.Select(r => new
-                {
-                    registrationId = r.Id,
-                    displayName = r.DisplayName,
-                    platform = r.Platform,
-                    createdAt = r.CreatedAt,
-                    lastSeenAt = r.LastSeenAt,
-                    online = registry.TryGetConnection(r.Id.ToString(), out _),
-                }));
+                IReadOnlyList<MachineResponse> machines = registrations
+                    .Select(r => new MachineResponse(
+                        r.Id,
+                        r.DisplayName,
+                        r.Platform,
+                        r.CreatedAt,
+                        r.LastSeenAt,
+                        Online: registry.TryGetConnection(r.Id.ToString(), out _)))
+                    .ToList();
+
+                return TypedResults.Ok(machines);
             })
             .RequireAuthorization(AuthPolicies.User);
 
         app.MapGet(
             "/api/daemons/{registrationId:guid}/list",
-            static async (
+            static async Task<Results<Ok<IReadOnlyList<DirectoryEntry>>, ProblemHttpResult>> (
                 Guid registrationId,
                 string path,
                 HttpContext http,
@@ -48,28 +55,21 @@ internal static class RelayEndpoints
                 CancellationToken cancellationToken) =>
             {
                 // Authorize before routing: the registration must belong to the caller.
-                var userId = GetUserId(http);
-                var owned = await db.DaemonRegistrations.AsNoTracking().AnyAsync(
-                    r => r.Id == registrationId && r.UserId == userId && r.RevokedAt == null,
-                    cancellationToken);
-                if (!owned)
+                if (!await OwnsMachineAsync(db, http, registrationId, cancellationToken))
                 {
-                    return Results.NotFound(new { error = "No such machine." });
+                    return NoSuchMachine();
                 }
 
                 if (!registry.TryGetConnection(registrationId.ToString(), out var connectionId))
                 {
-                    return Results.Problem(
-                        detail: "The machine is not connected right now.",
-                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                    return MachineOffline();
                 }
-
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeout.CancelAfter(OperationTimeout);
 
                 ListDirectoryResponse response;
                 try
                 {
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    timeout.CancelAfter(OperationTimeout);
                     response = await hub.Clients.Client(connectionId)
                         .InvokeAsync<ListDirectoryResponse>(
                             DaemonHubMethods.ListDirectory,
@@ -78,20 +78,24 @@ internal static class RelayEndpoints
                 }
                 catch (Exception ex) when (ex is IOException or OperationCanceledException)
                 {
-                    return Results.Problem(
-                        detail: "The machine did not answer.",
-                        statusCode: StatusCodes.Status504GatewayTimeout);
+                    return MachineSilent();
                 }
 
-                return response.Error is null
-                    ? Results.Ok(response.Entries)
-                    : Results.BadRequest(new { error = response.Error });
+                if (response.Error is not null || response.Entries is null)
+                {
+                    return TypedResults.Problem(
+                        detail: response.Error ?? "The machine sent no directory listing.",
+                        statusCode: StatusCodes.Status400BadRequest);
+                }
+
+                return TypedResults.Ok(response.Entries);
             })
+            .ProducesRelayProblems()
             .RequireAuthorization(AuthPolicies.User);
 
         app.MapGet(
             "/api/daemons/{registrationId:guid}/download",
-            static async (
+            static async Task<Results<PushStreamHttpResult, ProblemHttpResult>> (
                 Guid registrationId,
                 string path,
                 HttpContext http,
@@ -101,20 +105,14 @@ internal static class RelayEndpoints
                 IHubContext<DaemonHub> hub,
                 CancellationToken cancellationToken) =>
             {
-                var userId = GetUserId(http);
-                var owned = await db.DaemonRegistrations.AsNoTracking().AnyAsync(
-                    r => r.Id == registrationId && r.UserId == userId && r.RevokedAt == null,
-                    cancellationToken);
-                if (!owned)
+                if (!await OwnsMachineAsync(db, http, registrationId, cancellationToken))
                 {
-                    return Results.NotFound(new { error = "No such machine." });
+                    return NoSuchMachine();
                 }
 
                 if (!registry.TryGetConnection(registrationId.ToString(), out var connectionId))
                 {
-                    return Results.Problem(
-                        detail: "The machine is not connected right now.",
-                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                    return MachineOffline();
                 }
 
                 var transferId = transfers.Create(registrationId);
@@ -132,26 +130,38 @@ internal static class RelayEndpoints
                 catch (Exception ex) when (ex is IOException or OperationCanceledException)
                 {
                     transfers.Remove(transferId);
-                    return Results.Problem(
-                        detail: "The machine did not answer.",
-                        statusCode: StatusCodes.Status504GatewayTimeout);
+                    return MachineSilent();
                 }
 
                 if (response.Error is not null || response.FileName is null)
                 {
                     transfers.Remove(transferId);
-                    return Results.BadRequest(new { error = response.Error ?? "The machine sent no file metadata." });
+                    return TypedResults.Problem(
+                        detail: response.Error ?? "The machine sent no file metadata.",
+                        statusCode: StatusCodes.Status400BadRequest);
                 }
 
                 transfers.TryGetChannel(transferId, out var channel);
-                return Results.Stream(
+                return TypedResults.Stream(
                     destination => PumpTransferAsync(transfers, transferId, channel, destination, http.RequestAborted),
                     contentType: "application/octet-stream",
                     fileDownloadName: response.FileName);
             })
+            .Produces(StatusCodes.Status200OK, contentType: "application/octet-stream")
+            .ProducesRelayProblems()
             .RequireAuthorization(AuthPolicies.User);
 
         return app;
+    }
+
+    /// <summary>The problem responses every relayed file operation can answer with.</summary>
+    private static RouteHandlerBuilder ProducesRelayProblems(this RouteHandlerBuilder builder)
+    {
+        return builder
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable)
+            .ProducesProblem(StatusCodes.Status504GatewayTimeout);
     }
 
     private static async Task PumpTransferAsync(
@@ -187,8 +197,45 @@ internal static class RelayEndpoints
         }
     }
 
+    private static Task<bool> OwnsMachineAsync(
+        AppDbContext db, HttpContext http, Guid registrationId, CancellationToken cancellationToken)
+    {
+        var userId = GetUserId(http);
+        return db.DaemonRegistrations.AsNoTracking().AnyAsync(
+            r => r.Id == registrationId && r.UserId == userId && r.RevokedAt == null,
+            cancellationToken);
+    }
+
+    private static ProblemHttpResult NoSuchMachine()
+    {
+        return TypedResults.Problem(detail: "No such machine.", statusCode: StatusCodes.Status404NotFound);
+    }
+
+    private static ProblemHttpResult MachineOffline()
+    {
+        return TypedResults.Problem(
+            detail: "The machine is not connected right now.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    private static ProblemHttpResult MachineSilent()
+    {
+        return TypedResults.Problem(
+            detail: "The machine did not answer.",
+            statusCode: StatusCodes.Status504GatewayTimeout);
+    }
+
     private static Guid GetUserId(HttpContext http)
     {
         return Guid.Parse(http.User.FindFirst(AuthClaims.Subject)!.Value);
     }
 }
+
+/// <summary>One of the caller's paired machines.</summary>
+internal sealed record MachineResponse(
+    Guid RegistrationId,
+    string DisplayName,
+    string Platform,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? LastSeenAt,
+    bool Online);
