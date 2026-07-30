@@ -59,10 +59,11 @@ internal sealed partial class DaemonRelayService(
                 if (file is not null)
                 {
                     // The metadata response returns first; the bytes follow as a separate
-                    // streaming invocation tagged with the transfer id. The iterator owns
-                    // and disposes the stream.
-                    var chunks = ReadFileChunksAsync(file, stoppingToken);
-                    _ = this.PumpFileAsync(connection, request.TransferId, chunks, stoppingToken);
+                    // streaming invocation tagged with the transfer id, which takes ownership
+                    // of the open file from here.
+#pragma warning disable CA2025 // Handing the stream over IS the contract: PumpFileAsync closes it.
+                    _ = PumpFileAsync(connection, request.TransferId, file, logger, stoppingToken);
+#pragma warning restore CA2025
                 }
 
                 return response;
@@ -148,15 +149,34 @@ internal sealed partial class DaemonRelayService(
         }
     }
 
-    private async Task PumpFileAsync(HubConnection connection, Guid transferId, IAsyncEnumerable<byte[]> chunks, CancellationToken cancellationToken)
+    /// <summary>
+    /// Streams an opened file to the Server and closes it afterwards, whether or not the transfer
+    /// ever got going. The chunk iterator is lazy, so a failure before the first read — a dropped
+    /// socket, a transfer the Server no longer knows — would leave the handle open for the life of
+    /// the process if the stream's fate were left to the iterator.
+    /// </summary>
+    internal static async Task PumpFileAsync(
+        HubConnection connection,
+        Guid transferId,
+        FileStream file,
+        ILogger logger,
+        CancellationToken cancellationToken)
     {
         try
         {
-            await connection.InvokeAsync(ServerHubMethods.UploadFileChunks, transferId, chunks, cancellationToken);
+            await connection.InvokeAsync(
+                ServerHubMethods.UploadFileChunks,
+                transferId,
+                ReadFileChunksAsync(file, cancellationToken),
+                cancellationToken);
         }
         catch (Exception ex) when (ex is HubException or IOException or InvalidOperationException or OperationCanceledException)
         {
             LogTransferAborted(logger, transferId, ex);
+        }
+        finally
+        {
+            await file.DisposeAsync();
         }
     }
 
@@ -195,23 +215,21 @@ internal sealed partial class DaemonRelayService(
         }
     }
 
+    /// <summary>Reads the file in chunks. Closing it belongs to <see cref="PumpFileAsync"/>.</summary>
     private static async IAsyncEnumerable<byte[]> ReadFileChunksAsync(
         FileStream file,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        await using (file)
+        while (true)
         {
-            while (true)
+            var buffer = new byte[DownloadChunkBytes];
+            var read = await file.ReadAtLeastAsync(buffer, DownloadChunkBytes, throwOnEndOfStream: false, cancellationToken);
+            if (read == 0)
             {
-                var buffer = new byte[DownloadChunkBytes];
-                var read = await file.ReadAtLeastAsync(buffer, DownloadChunkBytes, throwOnEndOfStream: false, cancellationToken);
-                if (read == 0)
-                {
-                    yield break;
-                }
-
-                yield return read == DownloadChunkBytes ? buffer : buffer[..read];
+                yield break;
             }
+
+            yield return read == DownloadChunkBytes ? buffer : buffer[..read];
         }
     }
 
