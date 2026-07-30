@@ -164,10 +164,7 @@ describe("file operations", () => {
       }),
     );
 
-    const downloaded = await downloadFile(
-      "44444444-4444-4444-4444-444444444444",
-      "/data/notes.txt",
-    );
+    const downloaded = await downloadFile("44444444-4444-4444-4444-444444444444", "/data/notes.txt");
 
     expect(downloaded.fileName).toBe("notes.txt");
     expect(await downloaded.blob.text()).toBe("file bytes");
@@ -176,10 +173,7 @@ describe("file operations", () => {
   test("downloadFile falls back to the path's base name", async () => {
     mockFetch(new Response("bytes", { status: 200 }));
 
-    const downloaded = await downloadFile(
-      "44444444-4444-4444-4444-444444444444",
-      "/data/sub/report.pdf",
-    );
+    const downloaded = await downloadFile("44444444-4444-4444-4444-444444444444", "/data/sub/report.pdf");
 
     expect(downloaded.fileName).toBe("report.pdf");
   });

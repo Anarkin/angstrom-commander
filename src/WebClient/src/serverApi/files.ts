@@ -5,14 +5,9 @@ export async function listMachines(): Promise<Machine[]> {
   return await sendForJson<Machine[]>("/api/daemons");
 }
 
-export async function listDirectory(
-  registrationId: string,
-  path: string,
-): Promise<DirectoryEntry[]> {
+export async function listDirectory(registrationId: string, path: string): Promise<DirectoryEntry[]> {
   const query = new URLSearchParams({ path });
-  return await sendForJson<DirectoryEntry[]>(
-    `/api/daemons/${registrationId}/list?${query.toString()}`,
-  );
+  return await sendForJson<DirectoryEntry[]>(`/api/daemons/${registrationId}/list?${query.toString()}`);
 }
 
 export interface DownloadedFile {
