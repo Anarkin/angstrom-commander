@@ -44,10 +44,7 @@ interface RequestOptions {
   anonymous?: boolean;
 }
 
-export async function send(
-  path: string,
-  options: RequestOptions = {},
-): Promise<Response> {
+export async function send(path: string, options: RequestOptions = {}): Promise<Response> {
   const headers = new Headers();
   if (options.body !== undefined) {
     headers.set("Content-Type", "application/json");
@@ -62,10 +59,7 @@ export async function send(
   const response = await fetch(new URL(path, serverUrl), {
     method: options.method ?? "GET",
     headers,
-    body:
-      options.body === undefined
-        ? options.rawBody
-        : JSON.stringify(options.body),
+    body: options.body === undefined ? options.rawBody : JSON.stringify(options.body),
   });
 
   if (!response.ok) {
@@ -75,10 +69,7 @@ export async function send(
   return response;
 }
 
-export async function sendForJson<T>(
-  path: string,
-  options: RequestOptions = {},
-): Promise<T> {
+export async function sendForJson<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const response = await send(path, options);
   return (await response.json()) as T;
 }
@@ -86,8 +77,7 @@ export async function sendForJson<T>(
 /** Reads the message out of a ProblemDetails body, falling back to something readable. */
 async function describeFailure(response: Response): Promise<string> {
   try {
-    const problem = (await response.json()) as ProblemDetails &
-      ValidationProblemDetails;
+    const problem = (await response.json()) as ProblemDetails & ValidationProblemDetails;
     const validationMessages = Object.values(problem.errors ?? {}).flat();
     if (validationMessages.length > 0) {
       return validationMessages.join(" ");

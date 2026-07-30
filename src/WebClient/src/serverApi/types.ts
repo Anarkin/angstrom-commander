@@ -24,7 +24,5 @@ export function sizeInBytes(entry: DirectoryEntry): number | null {
     return null;
   }
 
-  return typeof entry.sizeBytes === "string"
-    ? Number(entry.sizeBytes)
-    : entry.sizeBytes;
+  return typeof entry.sizeBytes === "string" ? Number(entry.sizeBytes) : entry.sizeBytes;
 }

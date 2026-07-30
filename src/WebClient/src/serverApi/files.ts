@@ -26,19 +26,12 @@ export interface DownloadedFile {
  * fine for documents, not for very large files (a short-lived download ticket in the URL is the
  * eventual fix, letting the browser stream to disk natively).
  */
-export async function downloadFile(
-  registrationId: string,
-  path: string,
-): Promise<DownloadedFile> {
+export async function downloadFile(registrationId: string, path: string): Promise<DownloadedFile> {
   const query = new URLSearchParams({ path });
-  const response = await send(
-    `/api/daemons/${registrationId}/download?${query.toString()}`,
-  );
+  const response = await send(`/api/daemons/${registrationId}/download?${query.toString()}`);
 
   return {
-    fileName:
-      fileNameFrom(response.headers.get("Content-Disposition")) ??
-      baseNameOf(path),
+    fileName: fileNameFrom(response.headers.get("Content-Disposition")) ?? baseNameOf(path),
     blob: await response.blob(),
   };
 }
@@ -51,10 +44,10 @@ export async function uploadFile(
   overwrite = false,
 ): Promise<Transfer> {
   const query = new URLSearchParams({ path, overwrite: String(overwrite) });
-  return await sendForJson<Transfer>(
-    `/api/daemons/${registrationId}/upload?${query.toString()}`,
-    { method: "POST", rawBody: content },
-  );
+  return await sendForJson<Transfer>(`/api/daemons/${registrationId}/upload?${query.toString()}`, {
+    method: "POST",
+    rawBody: content,
+  });
 }
 
 /**

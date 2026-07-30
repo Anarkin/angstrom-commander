@@ -91,15 +91,12 @@ describe("error handling", () => {
       ),
     );
 
-    const failure = await listDirectory(
-      "11111111-1111-1111-1111-111111111111",
-      "/etc",
-    ).catch((error: unknown) => error);
+    const failure = await listDirectory("11111111-1111-1111-1111-111111111111", "/etc").catch(
+      (error: unknown) => error,
+    );
 
     expect(failure).toBeInstanceOf(ApiError);
-    expect((failure as ApiError).message).toBe(
-      "Path is outside the allowed roots.",
-    );
+    expect((failure as ApiError).message).toBe("Path is outside the allowed roots.");
     expect((failure as ApiError).status).toBe(400);
   });
 
@@ -114,13 +111,9 @@ describe("error handling", () => {
       ),
     );
 
-    const failure = await register("bad@example.com", "weak").catch(
-      (error: unknown) => error,
-    );
+    const failure = await register("bad@example.com", "weak").catch((error: unknown) => error);
 
-    expect((failure as ApiError).message).toBe(
-      "Passwords must have at least one digit.",
-    );
+    expect((failure as ApiError).message).toBe("Passwords must have at least one digit.");
   });
 
   test("flags unauthorized responses so callers can log out", async () => {
@@ -136,15 +129,10 @@ describe("file operations", () => {
   test("listDirectory encodes the path as a query parameter", async () => {
     const fetchMock = mockFetch(respondWith([]));
 
-    await listDirectory(
-      "22222222-2222-2222-2222-222222222222",
-      "/data/my files",
-    );
+    await listDirectory("22222222-2222-2222-2222-222222222222", "/data/my files");
 
     const { url } = lastRequest(fetchMock);
-    expect(url.pathname).toBe(
-      "/api/daemons/22222222-2222-2222-2222-222222222222/list",
-    );
+    expect(url.pathname).toBe("/api/daemons/22222222-2222-2222-2222-222222222222/list");
     expect(url.searchParams.get("path")).toBe("/data/my files");
   });
 
@@ -171,8 +159,7 @@ describe("file operations", () => {
       new Response("file bytes", {
         status: 200,
         headers: {
-          "Content-Disposition":
-            "attachment; filename=notes.txt; filename*=UTF-8''notes.txt",
+          "Content-Disposition": "attachment; filename=notes.txt; filename*=UTF-8''notes.txt",
         },
       }),
     );

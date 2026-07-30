@@ -25,12 +25,9 @@ try {
     shell: true,
   });
 
-  const normalize = (path) =>
-    readFileSync(path, "utf8").replaceAll("\r\n", "\n");
+  const normalize = (path) => readFileSync(path, "utf8").replaceAll("\r\n", "\n");
   if (normalize(generatedFile) !== normalize(COMMITTED)) {
-    console.error(
-      `\n${COMMITTED} is out of date with ${SPEC}. Run: npm run gen:api`,
-    );
+    console.error(`\n${COMMITTED} is out of date with ${SPEC}. Run: npm run gen:api`);
     process.exit(1);
   }
 
