@@ -40,6 +40,6 @@ curl -H "Authorization: Bearer <accessToken>" "http://localhost:5080/api/daemons
 curl -OJ -H "Authorization: Bearer <accessToken>" "http://localhost:5080/api/daemons/<registrationId>/download?path=/data/README.md"
 ```
 
-For working on the code, the [.NET 10 SDK](https://dotnet.microsoft.com/download) (exact version pinned in `global.json`) is enough: `dotnet test` builds everything and runs the test suites (integration tests start their own throwaway PostgreSQL via Testcontainers, so Docker must be running).
+For working on the code, the [.NET 10 SDK](https://dotnet.microsoft.com/download) (`global.json` sets the floor and rolls forward to the newest 10.0 feature band installed) is enough: `dotnet test` builds everything and runs the test suites (integration tests start their own throwaway PostgreSQL via Testcontainers, so Docker must be running).
 
 For the WebClient, Node.js 22+: `cd src/WebClient && npm ci && npm run dev` starts the dev server against the compose Server on <http://localhost:5080>; `npm test`, `npm run lint`, and `npm run format:check` mirror the CI gates. The WebClient and the Agent join the compose setup as they come to exist; see ARCHITECTURE.md § Dev environment.

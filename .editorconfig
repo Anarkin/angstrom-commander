@@ -323,7 +323,10 @@ dotnet_naming_symbols.non_field_members.applicable_kinds = property, event, meth
 dotnet_naming_symbols.non_field_members.applicable_accessibilities = public, internal, private, protected, protected_internal, private_protected
 dotnet_naming_symbols.non_field_members.required_modifiers =
 
-dotnet_naming_symbols.type_parameters.applicable_kinds = namespace
+# type_parameter, not namespace: the Visual Studio template this file came from ships that
+# typo, which aims the "must start with T" rule at namespaces and leaves type parameters
+# unchecked. It only stayed harmless because the namespace rule above matches first.
+dotnet_naming_symbols.type_parameters.applicable_kinds = type_parameter
 dotnet_naming_symbols.type_parameters.applicable_accessibilities = *
 dotnet_naming_symbols.type_parameters.required_modifiers =
 
