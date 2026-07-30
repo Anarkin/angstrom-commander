@@ -1,6 +1,12 @@
 **/bin/
 **/obj/
 **/TestResults/
+# Host build output: 150+ MB and 11k files that every build context carried for nothing. It also
+# kept builds from being hermetic — the WebClient image installs its own dependencies and then
+# copies the source over them, layering a host node_modules on top of the container's.
+**/node_modules/
+**/dist/
+**/coverage/
 .git/
 .github/
 *.md
