@@ -85,7 +85,7 @@ POST {{server}}/api/daemons/{{registrationId}}/copy-to/{{registrationId}}?source
 Authorization: Bearer {{token}}
 
 ### Sandbox refusal demo — NOTE: compose currently allows "/" too, so these return 200.
-### To watch the sandbox refuse (400), remove Relay__AllowedRoots__1 from docker-compose.yml.
+### To watch the sandbox refuse (400), remove Relay__AllowedRoots__2 from docker-compose.yml.
 GET {{server}}/api/daemons/{{registrationId}}/list?path=/etc
 Authorization: Bearer {{token}}
 

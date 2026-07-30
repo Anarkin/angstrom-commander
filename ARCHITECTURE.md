@@ -112,6 +112,7 @@ Where the code actually is, as of July 2026 — a living list, so update it when
 - Downloads buffer into a browser Blob — fine for documents, wrong for very large files; the fix is a short-lived download ticket in the URL so the browser streams to disk
 - No live-update channel for clients: panes refresh on navigation, and there is no transfer progress
 - The Daemon's private key sits unprotected on disk (no DPAPI/keychain/file-permission hardening) — must be addressed before any real install story
+- The path sandbox resolves links and then opens by path, so a link swapped in between the two would not be caught. Closing that needs opening by handle (`O_NOFOLLOW` and the Windows equivalent); it requires local write access to a shared folder to exploit, so it waits
 - `MapOpenApi()` is not wired, so the contract exists only as a build artifact; there is no browsable API reference
 - The Server integration suite boots a factory per test (~11 s) and could share one
 
@@ -121,7 +122,7 @@ Where the code actually is, as of July 2026 — a living list, so update it when
 - No secret has a default: the JWT signing key ships nowhere in the repo (Development reads one from `appsettings.Development.json`, every other environment sets `Auth__JwtSigningKey`), and a Server configured without one refuses to issue or accept a token instead of falling back to something known
 - Daemon identity = keypair generated at enrollment; the Server stores only the public key (DB leak ≠ Daemon impersonation); revoking a registration kills that machine's access
 - Enrollment: Daemon shows a short-lived one-time pairing code, user enters it in a logged-in WebClient or MobileClient (TV-pairing style)
-- Path sandboxing in the Daemon: canonicalize all client-supplied paths, enforce allowed roots (no traversal). Each root carries a writable flag and read-only is the default, so sharing a folder never implies permission to change it — writes resolve only against writable roots
+- Path sandboxing in the Daemon: canonicalize all client-supplied paths and resolve every symbolic link and junction along them, then enforce allowed roots — canonicalizing alone is lexical, so a link planted inside a shared folder would otherwise read and write outside it. Each root carries a writable flag and read-only is the default, so sharing a folder never implies permission to change it — writes resolve only against writable roots
 - AI access: the Agent and third-party MCP clients act only through the Server's MCP endpoint with user-scoped tokens (OAuth 2.1 or PATs) — same authorization and Daemon sandbox as any client, no extra access path; mutating ops additionally require explicit user confirmation; every AI session is listed and revocable on the "active sessions" page
 
 ## Scaling
