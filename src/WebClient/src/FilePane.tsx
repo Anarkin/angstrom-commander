@@ -20,6 +20,8 @@ interface FilePaneProps {
   /** Bumped by the other pane after writing here, so this pane reloads. */
   reloadToken: number;
   onChanged: () => void;
+  /** Lets the other pane see what is already here before copying over it. */
+  onEntriesLoaded: (entries: DirectoryEntry[]) => void;
 }
 
 export function FilePane({
@@ -32,6 +34,7 @@ export function FilePane({
   onFailure,
   reloadToken,
   onChanged,
+  onEntriesLoaded,
 }: FilePaneProps) {
   const [entries, setEntries] = useState<DirectoryEntry[] | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -56,24 +59,24 @@ export function FilePane({
         }
 
         setMessage(null);
-        setEntries(
-          [...listed].sort(
-            (left, right) =>
-              Number(right.isDirectory) - Number(left.isDirectory) || left.name.localeCompare(right.name),
-          ),
+        const sorted = [...listed].sort(
+          (left, right) => Number(right.isDirectory) - Number(left.isDirectory) || left.name.localeCompare(right.name),
         );
+        setEntries(sorted);
+        onEntriesLoaded(sorted);
       })
       .catch((error: unknown) => {
         if (active) {
           setEntries(null);
           setMessage(onFailure(error));
+          onEntriesLoaded([]);
         }
       });
 
     return () => {
       active = false;
     };
-  }, [registrationId, path, reloadToken, localReload, onFailure]);
+  }, [registrationId, path, reloadToken, localReload, onFailure, onEntriesLoaded]);
 
   function reload() {
     setLocalReload((token) => token + 1);
@@ -101,7 +104,9 @@ export function FilePane({
         link.href = url;
         link.download = file.fileName;
         link.click();
-        URL.revokeObjectURL(url);
+        // Revoking in the same tick cancels the download in some browsers: the click only
+        // queues it, and the URL has to outlive that.
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
       })
       .catch((error: unknown) => setMessage(onFailure(error)))
       .finally(() => setBusy(false));
@@ -112,9 +117,16 @@ export function FilePane({
       return;
     }
 
+    // Replacing a file is a decision the user gets to make: overwrite is only requested for a
+    // name already in this directory, and only after they say so.
+    const replacing = entries?.some((entry) => entry.name === file.name && !entry.isDirectory) ?? false;
+    if (replacing && !window.confirm(`${file.name} already exists here. Replace it?`)) {
+      return;
+    }
+
     setBusy(true);
     setMessage(null);
-    uploadFile(registrationId, joinPath(path, file.name), file, true)
+    uploadFile(registrationId, joinPath(path, file.name), file, replacing)
       .then((transfer) => {
         setMessage(`Uploaded ${file.name} (${transfer.bytesTransferred.toString()} bytes).`);
         onChanged();

@@ -17,6 +17,8 @@ function App() {
   const [right, setRight] = useState<PaneState>({ registrationId: null, path: "/uploads" });
   const [leftSelection, setLeftSelection] = useState<DirectoryEntry | null>(null);
   const [rightSelection, setRightSelection] = useState<DirectoryEntry | null>(null);
+  const [leftEntries, setLeftEntries] = useState<DirectoryEntry[]>([]);
+  const [rightEntries, setRightEntries] = useState<DirectoryEntry[]>([]);
   const [leftReload, setLeftReload] = useState(0);
   const [rightReload, setRightReload] = useState(0);
   const [transferMessage, setTransferMessage] = useState<string | null>(null);
@@ -39,9 +41,18 @@ function App() {
    * browser — the Server streams them straight from one machine to the other.
    */
   function copy(direction: "left-to-right" | "right-to-left") {
-    const [source, target, entry] =
-      direction === "left-to-right" ? [left, right, leftSelection] : [right, left, rightSelection];
+    const [source, target, entry, targetEntries] =
+      direction === "left-to-right"
+        ? [left, right, leftSelection, rightEntries]
+        : [right, left, rightSelection, leftEntries];
     if (entry === null || source.registrationId === null || target.registrationId === null) {
+      return;
+    }
+
+    // Overwriting is the user's call, not a default: only ask the Server to replace a file
+    // when there is one to replace and they have said so.
+    const replacing = targetEntries.some((existing) => existing.name === entry.name && !existing.isDirectory);
+    if (replacing && !window.confirm(`${entry.name} already exists in ${target.path}. Replace it?`)) {
       return;
     }
 
@@ -52,7 +63,7 @@ function App() {
       target.registrationId,
       joinPath(source.path, entry.name),
       joinPath(target.path, entry.name),
-      true,
+      replacing,
     )
       .then((transfer) => {
         setTransferMessage(`Copied ${entry.name} (${transfer.bytesTransferred.toString()} bytes).`);
@@ -101,6 +112,7 @@ function App() {
           onFailure={handleFailure}
           reloadToken={leftReload}
           onChanged={() => setRightReload((token) => token + 1)}
+          onEntriesLoaded={setLeftEntries}
         />
         <FilePane
           title="Right"
@@ -112,6 +124,7 @@ function App() {
           onFailure={handleFailure}
           reloadToken={rightReload}
           onChanged={() => setLeftReload((token) => token + 1)}
+          onEntriesLoaded={setRightEntries}
         />
       </div>
 

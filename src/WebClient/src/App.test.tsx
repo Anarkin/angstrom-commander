@@ -59,6 +59,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  // Restores window.confirm too, which the overwrite tests replace.
+  vi.restoreAllMocks();
 });
 
 test("asks for sign-in when there is no session", () => {
@@ -140,6 +142,8 @@ test("clicking a directory navigates into it", async () => {
 test("copies the selected file to the other machine without downloading it", async () => {
   localStorage.setItem("angstrom.accessToken", "token-abc");
   const calls = stubApi({ "/list": [notes], "/copy-to/": { bytesTransferred: 1024 } });
+  // Both panes list the same name, so this copy replaces a file and has to ask first.
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   const user = userEvent.setup();
   render(<App />);
 
@@ -149,13 +153,31 @@ test("copies the selected file to the other machine without downloading it", asy
   await user.click(screen.getByRole("button", { name: /copy →/i }));
 
   expect(await screen.findByText(/copied notes\.txt/i)).toBeInTheDocument();
+  expect(confirm).toHaveBeenCalled();
   const copyCall = calls.find((call) => call.url.includes("/copy-to/"));
   expect(copyCall?.method).toBe("POST");
   expect(copyCall?.url).toContain(`${homeMachine.registrationId}/copy-to/${laptopMachine.registrationId}`);
   expect(copyCall?.url).toContain("sourcePath=%2Fdata%2Fnotes.txt");
   expect(copyCall?.url).toContain("targetPath=%2Fuploads%2Fnotes.txt");
+  expect(copyCall?.url).toContain("overwrite=true");
   // No download endpoint involved — the bytes never touch the browser.
   expect(calls.some((call) => call.url.includes("/download"))).toBe(false);
+});
+
+test("a copy that would replace a file is not sent when the user declines", async () => {
+  localStorage.setItem("angstrom.accessToken", "token-abc");
+  const calls = stubApi({ "/list": [notes], "/copy-to/": { bytesTransferred: 1024 } });
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.selectOptions(await screen.findByLabelText("Left: machine"), homeMachine.registrationId);
+  await user.selectOptions(screen.getByLabelText("Right: machine"), laptopMachine.registrationId);
+  await user.click((await screen.findAllByText(/notes\.txt/))[0]!);
+  await user.click(screen.getByRole("button", { name: /copy →/i }));
+
+  expect(confirm).toHaveBeenCalled();
+  expect(calls.some((call) => call.url.includes("/copy-to/"))).toBe(false);
 });
 
 test("copy stays disabled until a file is selected on both machines", async () => {

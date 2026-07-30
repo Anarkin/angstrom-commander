@@ -23,18 +23,44 @@ export function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString();
 }
 
-/** Joins a directory and a child name with forward slashes (the Daemon canonicalizes anyway). */
+/** `C:\...` or `\\server\share` — a Daemon on Windows reports paths this way. */
+function isWindowsPath(path: string): boolean {
+  return /^[a-z]:/i.test(path) || path.startsWith("\\\\");
+}
+
+/** `C:` on its own is not a path; the drive's root is `C:\`. */
+function isDriveLetter(path: string): boolean {
+  return /^[a-z]:$/i.test(path);
+}
+
+function trimTrailingSeparators(path: string): string {
+  return path.replace(/[\\/]+$/, "");
+}
+
+/** Joins a directory and a child name, in the separator that directory is written with. */
 export function joinPath(directory: string, name: string): string {
-  return `${directory.replace(/\/+$/, "")}/${name}`;
+  const separator = isWindowsPath(directory) ? "\\" : "/";
+  return `${trimTrailingSeparators(directory)}${separator}${name}`;
 }
 
 /** The containing directory, or the same path when already at a root. */
 export function parentPath(path: string): string {
-  const trimmed = path.replace(/\/+$/, "");
-  const lastSeparator = trimmed.lastIndexOf("/");
-  if (lastSeparator <= 0) {
+  const trimmed = trimTrailingSeparators(path);
+  if (trimmed === "") {
+    return "/";
+  }
+  if (isDriveLetter(trimmed)) {
+    return `${trimmed}\\`;
+  }
+
+  const lastSeparator = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  if (lastSeparator < 0) {
+    return trimmed;
+  }
+  if (lastSeparator === 0) {
     return "/";
   }
 
-  return trimmed.slice(0, lastSeparator);
+  const parent = trimmed.slice(0, lastSeparator);
+  return isDriveLetter(parent) ? `${parent}\\` : parent;
 }
