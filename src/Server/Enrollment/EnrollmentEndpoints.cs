@@ -78,7 +78,7 @@ internal static class EnrollmentEndpoints
         // Called by a logged-in user typing in the code the Daemon displayed.
         app.MapPost(
             "/api/enrollment/claim",
-            static async Task<Results<Ok<ClaimResponse>, UnauthorizedHttpResult, ProblemHttpResult>> (
+            static async Task<Results<Ok<ClaimResponse>, ProblemHttpResult>> (
                 ClaimRequest request,
                 HttpContext http,
                 AppDbContext db,
@@ -90,7 +90,9 @@ internal static class EnrollmentEndpoints
                 // that's an auth failure, not a 500-worthy FK violation.
                 if (!await db.Users.AnyAsync(u => u.Id == userId, cancellationToken))
                 {
-                    return TypedResults.Unauthorized();
+                    return TypedResults.Problem(
+                        detail: "This session is no longer valid. Sign in again.",
+                        statusCode: StatusCodes.Status401Unauthorized);
                 }
 
                 var now = DateTimeOffset.UtcNow;
@@ -135,6 +137,7 @@ internal static class EnrollmentEndpoints
 
                 return TypedResults.Ok(new ClaimResponse(registration.Id, registration.DisplayName));
             })
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ValidatesRequest<ClaimRequest>()
             .RequireAuthorization(AuthPolicies.User);
