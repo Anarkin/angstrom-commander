@@ -125,7 +125,7 @@ Assumes Container Apps *active* billing rates, one enrolled Daemon, and light pe
 | Component | prod (always on) | test (12 h/day ≈ 365 h) | demo123 (3-day stamp, ~2 h used) |
 | --- | --- | --- | --- |
 | **Server** — Container Apps, 0.25 vCPU / 0.5 GiB | ~$14 (730 h, grant applied) | ~$10 | ~$0.05 (scales to zero) |
-| **PostgreSQL** | Flexible Server B1ms + 32 GiB: ~$16 | containerized in the stamp, same hours: ~$10 (data resets when it scales down; a second database on prod's server is free but shares a server with prod) | containerized: ~$2 |
+| **PostgreSQL** | Flexible Server B1ms + 32 GiB: ~$16 | its own Flexible Server B1ms, always on: ~$16 (shared test data must survive restarts, so this cannot be containerized — see the note below) | containerized in the stamp, disposable: ~$2 |
 | **WebClient** — Static Web Apps, free tier | $0 | $0 | $0 |
 | **Container Registry** — ACR Basic | ~$5 (shared by all stamps) | shared | shared |
 | **DNS zone** | ~$0.50 (shared) | shared | shared |
@@ -133,7 +133,9 @@ Assumes Container Apps *active* billing rates, one enrolled Daemon, and light pe
 | **Egress** — first 100 GB/month free, then ~$0.087/GB | $0 at light use | $0 | $0 |
 | **Agent / LLM tokens** — pay-per-token, per-user caps | $0 until the Agent ships | — | — |
 | **Redis** — only once the Server runs >1 replica | $0 today, ~$16 when needed | — | — |
-| **Total** | **~$36/month** | **~$20/month** | **~$2 for its whole life** |
+| **Total** | **~$36/month** | **~$26/month** | **~$2 for its whole life** |
+
+Which PostgreSQL an environment gets is a stamp variable, not a different stamp: **managed wherever data must survive** (prod, and any shared environment people rely on), **containerized only where the data is disposable** (per-branch demo stamps, local compose). There is no third option in this hosting model — a container's filesystem is ephemeral, and Container Apps' only volume type is Azure Files over SMB, which PostgreSQL does not support as a data directory (it requires `0700` on `PGDATA`, which SMB cannot express, and lacks dependable `fsync`). "Containerized" therefore always means "disposable".
 
 Two things drive the bill, and neither is the resource list:
 
