@@ -24,7 +24,7 @@ Besides the products, the repo carries supporting codebases — authored and rev
 ## Tech stack
 
 - **Daemon + Server + Agent**: .NET, latest LTS (currently .NET 10); xUnit for tests
-  - Server additionally: PostgreSQL + EF Core (migrations; fresh envs self-initialize schema); ASP.NET Core Identity for user accounts (self-managed email+password; social logins deferred — offering any would trigger the mandatory Apple sign-in rule on iOS); OpenIddict for the OAuth 2.1 authorization server
+  - Server additionally: **managed** PostgreSQL + EF Core (migrations; envs self-initialize schema when `Database:MigrateOnStartup` is set). Managed for anything holding real data — the schema is small but relational, transactional and security-sensitive (Identity, pairing claims, sessions), so a key-value or blob store would trade a few dollars for hand-rolled Identity stores and no multi-row atomicity. Throwaway stamps run Postgres in a container, since their data is disposable; ASP.NET Core Identity for user accounts (self-managed email+password; social logins deferred — offering any would trigger the mandatory Apple sign-in rule on iOS); OpenIddict for the OAuth 2.1 authorization server
 - **WebClient**: latest React, TypeScript (strict); Vitest + React Testing Library for tests
 - **MobileClient**: React Native (iOS + Android), TypeScript (strict); Jest + React Native Testing Library for tests (RN's supported runner — Vitest doesn't fit RN)
 
@@ -62,7 +62,7 @@ Diagrams: see the Diagrams section at the bottom.
   - Each Daemon holds one persistent outbound WebSocket (SignalR, port 443) open to the Server; the Server routes client requests down it and matches responses back
   - Correlation IDs multiplex many concurrent operations over the one socket
   - Works through NAT/firewalls because an established TCP connection is bidirectional regardless of who initiated it
-  - Socket ownership is the Server's only per-replica state: with multiple replicas, a connection registry (Daemon → owning replica, in Redis) routes each request directly to the replica holding that Daemon's socket — NOT SignalR's Redis backplane, which broadcasts every message to every replica and collapses under this pattern. v1 runs one replica with an in-process map, but socket lookup sits behind an interface from the first commit so the registry is a swap, not surgery
+  - Socket ownership is the Server's only per-replica state: with multiple replicas, a connection registry (Daemon → owning replica, in Redis) lets any replica find the one holding that Daemon's socket and forward the whole request there. Requests must follow the socket rather than messages crossing a bus, because a transfer's bounded channel lives in the owning replica's memory — Redis stays a small directory and never carries file bytes. A SignalR Redis backplane is not the answer here: it addresses fan-out (groups, users, all clients), still requires sticky sessions, and does nothing about in-process transfer channels. Azure SignalR Service is the alternative worth pricing when that time comes, since it would terminate the Daemon sockets itself. v1 runs one replica with an in-process map, but socket lookup sits behind an interface from the first commit so the registry is a swap, not surgery
   - File transfers stream through in chunks (never buffered whole); bulk transfers may get a second dedicated connection later
   - Every transfer is one bounded channel with a single writer and reader, which is what makes the dual pane's copy cheap: source Daemon → Server → target Daemon with no client round trip. A download is that channel read by the HTTP response, an upload is it written by the HTTP request. Backpressure is inherent — a slow reader slows the sender. (Note SignalR cannot push a stream to a client, so a receiving Daemon is told a transfer is waiting and pulls it.)
 - MCP endpoint — the file-op tool surface exposed as a remote MCP server (Streamable HTTP, e.g. `api.<domain>.com/mcp`):
@@ -110,7 +110,7 @@ What already scales without change: PostgreSQL stores coordination metadata only
 See the "Provisioning & deployment" diagram at the bottom for how the pieces fit together.
 
 - Azure hosts everything hostable (Server, WebClient, Agent)
-- Azure services: Azure Container Apps (Server — WebSockets, scale to zero), Static Web Apps (WebClient hosting), Azure Container Registry, Microsoft Foundry (Foundry Models — serverless LLM inference, no idle cost; Foundry Agent Service — hosts the Agent container)
+- Azure services: Azure Container Apps (Server — WebSockets; `minReplicas: 1`, because Daemons hold sockets open the Server cannot scale to zero — only Daemon-less environments can), Static Web Apps (WebClient hosting), Azure Container Registry, Microsoft Foundry (Foundry Models — serverless LLM inference, no idle cost; Foundry Agent Service — hosts the Agent container)
 - Infrastructure as code: Terraform (via azd's Terraform provider) — `azd up` provisions + deploys; remote state in an Azure Storage account
 - Environments are first-class: `azd env new <name>` + `azd up` spawns a full isolated env (test, qa, per-feature-branch demos, prod); one resource group per env; `azd down` tears it down. Prod is the same stamp with different variables (sizes/SKUs), never a hand-built special case
 - `azd up` is idempotent: per resource Terraform no-ops, updates in place, or (only for immutable attribute changes) destroys-and-recreates — the plan marks replacements explicitly. Manual portal edits are drift and get reverted on the next apply; the `.tf` files always win
@@ -157,7 +157,6 @@ Levers: PostgreSQL on a standing free serverless tier (e.g. Neon, which scales t
 
 ## Open questions
 
-- Azure hosting flavor for PostgreSQL: Flexible Server (stoppable, not auto-pause) vs Postgres-in-a-container for throwaway demo envs
 - When the direct P2P connection upgrade ships — not whether (see § Scaling: relay egress cost makes it an economic requirement at scale, though not for v1)
 - Which LLMs earn a slot in the curated model picker at launch (tool-calling quality varies widely across the Foundry catalog); per-model SDK: Claude via the official `Anthropic.Foundry` .NET SDK, others via the OpenAI-compatible surface
 ## Diagrams
