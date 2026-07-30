@@ -32,6 +32,18 @@ services:
       timeout: 3s
       retries: 10
 
+  webclient:
+    build:
+      context: .
+      dockerfile: src/WebClient/Dockerfile
+      args:
+        # The browser talks to the Server directly, so this is the host-visible URL.
+        VITE_SERVER_URL: "http://localhost:5080"
+    ports:
+      - "5081:8080"
+    depends_on:
+      - server
+
   daemon:
     build:
       context: .

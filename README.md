@@ -13,7 +13,9 @@ Prerequisite: Docker (dev machines typically run Rancher Desktop).
 docker compose up --build
 ```
 
-brings up PostgreSQL, the Server on <http://localhost:5080>, and a Daemon that dials out to it, exposing the repo directory read-only as `/data` (plus, as a dev-only example of "share everything", the container's whole filesystem as `/`).
+brings up PostgreSQL, the Server on <http://localhost:5080>, the WebClient on <http://localhost:5081>, and a Daemon that dials out to it. The Daemon shares the repo directory read-only as `/data`, a writable volume as `/uploads`, and — as a dev-only example of "share everything" — the container's whole filesystem read-only as `/`.
+
+Open <http://localhost:5081>, create an account, pair the Daemon with the code from `docker compose logs daemon`, then point both panes at the machine to browse, download, upload, and copy files between paths.
 
 The easiest way to try it: open [tools/Server.http](tools/Server.http) and run the requests top to bottom in your IDE (VS Code REST Client etc.) — the token and registration id chain between requests automatically.
 
