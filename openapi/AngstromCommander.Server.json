@@ -988,7 +988,7 @@
             "type": "string"
           }
         },
-        "description": "Lengths match the columns these land in, so an oversized value is a 400 from the endpoint\r\nrather than a 500 out of the database driver. The password cap is its own point: hashing is\r\ndeliberately slow, and an unbounded password is free work for anyone who asks."
+        "description": "Credentials for a new account."
       },
       "RegisterResponse": {
         "required": [

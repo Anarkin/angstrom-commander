@@ -85,11 +85,14 @@ internal static class AuthEndpoints
     }
 }
 
-/// <summary>
-/// Lengths match the columns these land in, so an oversized value is a 400 from the endpoint
-/// rather than a 500 out of the database driver. The password cap is its own point: hashing is
-/// deliberately slow, and an unbounded password is free work for anyone who asks.
-/// </summary>
+// Lengths match the columns these land in, so an oversized value is a 400 from the endpoint
+// rather than a 500 out of the database driver. The password cap is its own point: hashing is
+// deliberately slow, and an unbounded password is free work for anyone who asks.
+//
+// Kept out of the XML summary deliberately: summaries are published verbatim into the OpenAPI
+// contract, so a multi-line one embeds whichever line endings the author's editor wrote and the
+// generated file stops matching between machines.
+/// <summary>Credentials for a new account.</summary>
 internal sealed record RegisterRequest(
     [property: Required][property: EmailAddress][property: StringLength(256)] string Email,
     [property: Required][property: StringLength(128, MinimumLength = 1)] string Password);

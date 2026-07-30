@@ -822,11 +822,7 @@ export interface components {
             detail?: null | string;
             instance?: null | string;
         };
-        /**
-         * @description Lengths match the columns these land in, so an oversized value is a 400 from the endpoint
-         *     rather than a 500 out of the database driver. The password cap is its own point: hashing is
-         *     deliberately slow, and an unbounded password is free work for anyone who asks.
-         */
+        /** @description Credentials for a new account. */
         RegisterRequest: {
             email: string;
             password: string;
