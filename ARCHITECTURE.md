@@ -68,7 +68,7 @@ Diagrams: see the Diagrams section at the bottom.
   - Works through NAT/firewalls because an established TCP connection is bidirectional regardless of who initiated it
   - Socket ownership is the Server's only per-replica state: with multiple replicas, a connection registry (Daemon → owning replica, in Redis) lets any replica find the one holding that Daemon's socket and forward the whole request there. Requests must follow the socket rather than messages crossing a bus, because a transfer's bounded channel lives in the owning replica's memory — Redis stays a small directory and never carries file bytes. A SignalR Redis backplane is not the answer here: it addresses fan-out (groups, users, all clients), still requires sticky sessions, and does nothing about in-process transfer channels. Azure SignalR Service is the alternative worth pricing when that time comes, since it would terminate the Daemon sockets itself. v1 runs one replica with an in-process map, but socket lookup sits behind an interface from the first commit so the registry is a swap, not surgery
   - File transfers stream through in chunks (never buffered whole); bulk transfers may get a second dedicated connection later
-  - Every transfer is one bounded channel with a single writer and reader, which is what makes the dual pane's copy cheap: source Daemon → Server → target Daemon with no client round trip. A download is that channel read by the HTTP response, an upload is it written by the HTTP request. Backpressure is inherent — a slow reader slows the sender. (Note SignalR cannot push a stream to a client, so a receiving Daemon is told a transfer is waiting and pulls it.)
+  - Every transfer is one bounded channel with a single writer and reader, which is what makes the dual pane's copy cheap: source Daemon → Server → target Daemon with no client round trip. A download is that channel read by the HTTP response, an upload is it written by the HTTP request. Backpressure is inherent — a slow reader slows the sender. (Note SignalR cannot push a stream to a client, so a receiving Daemon is told a transfer is waiting and pulls it.) Buffers make transfers a memory cost, so each user gets a ceiling on how many they may hold open, and either end going away fails the transfer rather than leaving the other waiting
 - MCP endpoint — the file-op tool surface exposed as a remote MCP server (Streamable HTTP, e.g. `api.<domain>.com/mcp`):
   - Same authorized, relayed, sandboxed ops as the Server's REST API — MCP is a protocol adapter over one tool surface, never a second implementation
   - Auth: OAuth 2.1 (authorization code + PKCE, dynamic client registration; OpenIddict) with Angstrom Commander login + consent pages; personal access tokens as the simpler first step. Both land in the sessions table (see the DB bullets below)
@@ -99,13 +99,16 @@ Where the code actually is, as of July 2026 — a living list, so update it when
 
 **Working end to end** (locally, via `docker compose up`; verified with tests and by hand):
 
-- Guardrails and CI from the first commit: warnings-as-errors, analyzers, formatting and type-checked lint gates for both .NET and the WebClient, tests with coverage on every push
-- The relay: each Daemon holds one outbound SignalR connection; the Server routes requests down it. Socket lookup already sits behind `IDaemonConnectionRegistry`
-- Accounts (ASP.NET Core Identity, JWT), TV-style enrollment (pairing code → user claims it → registration), and Daemon connection tokens earned by signing a server challenge with the machine's private key
-- File operations: list, streamed download, streamed upload, and machine-to-machine copy — all chunked through one bounded channel, never buffered whole
-- Path sandbox with per-root read-only/writable flags
+- Guardrails and CI from the first commit: warnings-as-errors, analyzers, formatting and type-checked lint gates for both .NET and the WebClient, tests with coverage on every push, and a compose smoke test that builds all three images and waits for the Daemon to reach the Server
+- The relay: each Daemon holds one outbound SignalR connection and reconnects indefinitely; the Server routes requests down it. Socket lookup already sits behind `IDaemonConnectionRegistry`
+- Accounts (ASP.NET Core Identity, JWT), TV-style enrollment (pairing code → user claims it → registration, claimed atomically), and Daemon connection tokens earned by signing a server challenge with the machine's private key
+- Sign-in defences: account lockout, per-caller rate limits on every anonymous endpoint, no enumerable difference between a wrong password and an unknown account, and no signing key with a default
+- File operations: list, streamed download, streamed upload, and machine-to-machine copy — all chunked through one bounded channel, never buffered whole, with per-chunk deadlines on both directions and a per-user ceiling on concurrent transfers
+- Path sandbox with per-root read-only/writable flags, symlink and junction resolution, and the Daemon's own state kept unreachable
+- Request bodies validated against the contract's own field limits, so bad input is a 400 rather than a database error
 - The API contract is generated (C# → `openapi/AngstromCommander.Server.json` → the WebClient's `schema.d.ts`), with CI failing on drift
-- WebClient: sign in / register, claim a pairing code, machine list with online status, dual-pane browser with download, upload and copy between panes
+- Server and Daemon containers run as a non-root user
+- WebClient: sign in / register, claim a pairing code, machine list with online status, dual-pane browser with download, upload and copy between panes (both asking before they replace a file)
 
 **Next, in order:** remaining file operations (mkdir, rename, delete, move) → MCP endpoint with PATs → OAuth + consent → Agent + model picker. Deploying to Azure (Terraform + `azd`) is orthogonal and can happen at any point; nothing is deployed yet.
 
@@ -113,20 +116,24 @@ Where the code actually is, as of July 2026 — a living list, so update it when
 
 - No `infra/` yet — nothing runs in Azure; the DNS zone above is the only provisioned resource
 - Sessions are stateless JWTs only: no sessions table, no refresh tokens, no "active sessions" page, and no unpair/revoke endpoint (`RevokedAt` exists in the schema but nothing sets it)
-- Rate limiting buckets callers by remote address, which is only as good as the proxy configuration in front of it
+- Rate limiting buckets callers by remote address, and the Server trusts `X-Forwarded-For` from any proxy because Container Apps' ingress address is not known ahead of time. That is only sound while the ingress is the sole route in — put the Server anywhere reachable directly and a caller can forge their own bucket
 - Downloads buffer into a browser Blob — fine for documents, wrong for very large files; the fix is a short-lived download ticket in the URL so the browser streams to disk
 - No live-update channel for clients: panes refresh on navigation, and there is no transfer progress
+- The WebClient bundle ships no Content-Security-Policy: it has to name the Server's origin, so it belongs with the Static Web Apps configuration rather than the compose-only nginx image
+- Windows path handling in the WebClient is unit-tested but has never met a Daemon running on Windows
 - The Daemon's private key sits unprotected on disk (no DPAPI/keychain/file-permission hardening) — the sandbox refuses to serve it however the roots are configured, but local file permissions must still be addressed before any real install story
 - The path sandbox resolves links and then opens by path, so a link swapped in between the two would not be caught. Closing that needs opening by handle (`O_NOFOLLOW` and the Windows equivalent); it requires local write access to a shared folder to exploit, so it waits
 - `MapOpenApi()` is not wired, so the contract exists only as a build artifact; there is no browsable API reference
-- The Server integration suite boots a factory per test (~11 s) and could share one
+- The Server integration suite boots a factory per test, which is most of its runtime, and could share one
 
 ## Security model
 
-- TLS everywhere; WebClient and MobileClient authenticate with JWT access tokens + hashed refresh tokens (revocable per device)
+The model the system is built toward, which includes parts not written yet (MCP auth, refresh tokens, the sessions page). § Implementation status is the source of truth for what exists today.
+
+- TLS everywhere; WebClient and MobileClient authenticate with JWT access tokens, and will carry hashed refresh tokens revocable per device once sessions are stored
 - Sign-in is guessing-resistant: failed attempts lock the account (ASP.NET Core Identity's counters), wrong password and unknown account answer identically so the endpoint cannot be used to enumerate emails, and every anonymous endpoint — sign-in, registration, enrollment, the Daemon challenge/token exchange — is rate limited per caller
 - No secret has a default: the JWT signing key ships nowhere in the repo (Development reads one from `appsettings.Development.json`, every other environment sets `Auth__JwtSigningKey`), and a Server configured without one refuses to issue or accept a token instead of falling back to something known
-- Daemon identity = keypair generated at enrollment; the Server stores only the public key (DB leak ≠ Daemon impersonation); revoking a registration kills that machine's access
+- Daemon identity = keypair generated at enrollment; the Server stores only the public key (DB leak ≠ Daemon impersonation); revoking a registration kills that machine's access. The sandbox refuses to serve the Daemon's own state directory whatever the roots say, so sharing a folder that contains it cannot hand out the key that is the machine's identity
 - Enrollment: Daemon shows a short-lived one-time pairing code, user enters it in a logged-in WebClient or MobileClient (TV-pairing style)
 - Path sandboxing in the Daemon: canonicalize all client-supplied paths and resolve every symbolic link and junction along them, then enforce allowed roots — canonicalizing alone is lexical, so a link planted inside a shared folder would otherwise read and write outside it. Each root carries a writable flag and read-only is the default, so sharing a folder never implies permission to change it — writes resolve only against writable roots
 - AI access: the Agent and third-party MCP clients act only through the Server's MCP endpoint with user-scoped tokens (OAuth 2.1 or PATs) — same authorization and Daemon sandbox as any client, no extra access path; mutating ops additionally require explicit user confirmation; every AI session is listed and revocable on the "active sessions" page
@@ -198,7 +205,7 @@ One discount is deliberately left out of the figures above: Container Apps inclu
 ## Dev environment
 
 - Everything runs in Docker containers; dev machines likely run Rancher Desktop (Windows)
-- Setup guide should center on a single simple docker command (e.g. `docker compose up`) that brings up Server (+ its PostgreSQL), WebClient, and the Agent out of the box
+- One command is the whole setup: `docker compose up` brings up the Server (+ its PostgreSQL), the WebClient, and a Daemon that pairs itself. The Agent joins them when it exists
 - The Agent runs locally as a plain container (Foundry Agent Service is prod hosting, not a dev dependency); it points at a real Foundry Models endpoint — there is no local LLM, dev inference is pay-per-token against a dev Foundry resource
 
 ## Open questions
