@@ -332,6 +332,46 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task FinishedDownloadsGiveTheirTransferSlotsBack()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+        using var userClient = factory.CreateClient();
+        var userToken = await RegisterAndLoginAsync(userClient, "slots@example.com");
+        userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+
+        var payload = new byte[1024];
+        RandomNumberGenerator.Fill(payload);
+
+        var (registrationId, connection) = await ConnectDaemonAsync(factory, userClient, conn =>
+            conn.On<DownloadFileRequest, DownloadFileResponse>(
+                DaemonHubMethods.DownloadFile,
+                request =>
+                {
+                    _ = Task.Run(() => conn.InvokeAsync(
+                        ServerHubMethods.UploadFileChunks, request.TransferId, ChunksOf(payload)));
+                    return DownloadFileResponse.ForFile("blob.bin", payload.Length);
+                }));
+
+        await using (connection)
+        {
+            // Comfortably more than one user may hold open at once: if a finished transfer kept
+            // its slot, a busy session would start refusing downloads with none still running.
+            for (var attempt = 1; attempt <= 20; attempt++)
+            {
+                using var response = await userClient.GetAsync(
+                    new Uri($"/api/daemons/{registrationId}/download?path=/data/blob.bin", UriKind.Relative));
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    Assert.Fail($"Download {attempt} failed: {await response.Content.ReadAsStringAsync()}");
+                }
+
+                Assert.Equal(payload, await response.Content.ReadAsByteArrayAsync());
+            }
+        }
+    }
+
+    [Fact]
     public async Task DownloadSurfacesDaemonReportedError()
     {
         using var factory = new ServerFactory(postgres.ConnectionString);

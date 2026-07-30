@@ -149,7 +149,22 @@ internal static class RelayEndpoints
                         statusCode: StatusCodes.Status400BadRequest);
                 }
 
-                transfers.TryGetChannel(transferId, out var channel);
+                if (!transfers.TryGetChannel(transferId, out var channel))
+                {
+                    // Only a disconnect can have taken it away between creating it and here.
+                    return MachineSilent();
+                }
+
+                // Belt and braces on top of the stream callback's own cleanup: a response that
+                // never reaches the callback — headers failing, the connection dying in between —
+                // would otherwise leave the transfer behind, holding one of this user's slots
+                // until their Daemon next reconnects. Removing twice is harmless.
+                http.Response.OnCompleted(() =>
+                {
+                    transfers.Remove(transferId);
+                    return Task.CompletedTask;
+                });
+
                 return TypedResults.Stream(
                     destination => PumpTransferAsync(transfers, transferId, channel, destination, http.RequestAborted),
                     contentType: "application/octet-stream",
