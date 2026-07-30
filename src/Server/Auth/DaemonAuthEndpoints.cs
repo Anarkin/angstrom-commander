@@ -31,7 +31,8 @@ internal static class DaemonAuthEndpoints
                 var nonce = RandomNumberGenerator.GetBytes(32);
                 cache.Set(NonceCacheKey(request.RegistrationId), nonce, NonceLifetime);
                 return TypedResults.Ok(new ChallengeResponse(Convert.ToBase64String(nonce)));
-            });
+            })
+            .RequireRateLimiting(RateLimitPolicies.Authentication);
 
         app.MapPost(
             "/api/daemon-auth/token",
@@ -75,7 +76,8 @@ internal static class DaemonAuthEndpoints
                 }
 
                 return TypedResults.Ok(new DaemonTokenResponse(tokens.CreateDaemonToken(request.RegistrationId)));
-            });
+            })
+            .RequireRateLimiting(RateLimitPolicies.Authentication);
 
         return app;
     }

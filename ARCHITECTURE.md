@@ -108,7 +108,7 @@ Where the code actually is, as of July 2026 — a living list, so update it when
 
 - No `infra/` yet — nothing runs in Azure; the DNS zone above is the only provisioned resource
 - Sessions are stateless JWTs only: no sessions table, no refresh tokens, no "active sessions" page, and no unpair/revoke endpoint (`RevokedAt` exists in the schema but nothing sets it)
-- The anonymous enrollment endpoints have no rate limiting
+- Rate limiting buckets callers by remote address, which is only as good as the proxy configuration in front of it
 - Downloads buffer into a browser Blob — fine for documents, wrong for very large files; the fix is a short-lived download ticket in the URL so the browser streams to disk
 - No live-update channel for clients: panes refresh on navigation, and there is no transfer progress
 - The Daemon's private key sits unprotected on disk (no DPAPI/keychain/file-permission hardening) — must be addressed before any real install story
@@ -119,6 +119,7 @@ Where the code actually is, as of July 2026 — a living list, so update it when
 ## Security model
 
 - TLS everywhere; WebClient and MobileClient authenticate with JWT access tokens + hashed refresh tokens (revocable per device)
+- Sign-in is guessing-resistant: failed attempts lock the account (ASP.NET Core Identity's counters), wrong password and unknown account answer identically so the endpoint cannot be used to enumerate emails, and every anonymous endpoint — sign-in, registration, enrollment, the Daemon challenge/token exchange — is rate limited per caller
 - No secret has a default: the JWT signing key ships nowhere in the repo (Development reads one from `appsettings.Development.json`, every other environment sets `Auth__JwtSigningKey`), and a Server configured without one refuses to issue or accept a token instead of falling back to something known
 - Daemon identity = keypair generated at enrollment; the Server stores only the public key (DB leak ≠ Daemon impersonation); revoking a registration kills that machine's access
 - Enrollment: Daemon shows a short-lived one-time pairing code, user enters it in a logged-in WebClient or MobileClient (TV-pairing style)

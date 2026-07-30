@@ -1,8 +1,10 @@
+using System.Threading.RateLimiting;
 using AngstromCommander.Server.Auth;
 using AngstromCommander.Server.Data;
 using AngstromCommander.Server.Enrollment;
 using AngstromCommander.Server.Relay;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
@@ -19,8 +21,24 @@ builder.Services.AddSingleton<FileTransferRegistry>();
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Database")));
+// SignInManager comes along because it is what counts failed sign-in attempts and locks the
+// account; the defaults are five tries, then five minutes out.
 builder.Services.AddIdentityCore<AppUser>(static options => options.User.RequireUniqueEmail = true)
-    .AddEntityFrameworkStores<AppDbContext>();
+    .AddEntityFrameworkStores<AppDbContext>()
+    .AddSignInManager();
+
+var rateLimits = builder.Configuration.GetSection(RateLimitOptions.SectionName).Get<RateLimitOptions>()
+    ?? new RateLimitOptions();
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy(
+        RateLimitPolicies.Authentication,
+        http => PartitionByCaller(http, rateLimits.AuthenticationPermitsPerMinute));
+    options.AddPolicy(
+        RateLimitPolicies.EnrollmentPolling,
+        http => PartitionByCaller(http, rateLimits.EnrollmentPollPermitsPerMinute));
+});
 
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
 builder.Services.AddSingleton<TokenService>();
@@ -70,6 +88,7 @@ if (app.Environment.IsDevelopment())
     app.UseCors(static policy => policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
 }
 
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -81,6 +100,19 @@ app.MapDaemonAuthEndpoints();
 app.MapRelayEndpoints();
 
 await app.RunAsync();
+
+// One bucket per caller address. Behind a reverse proxy this needs UseForwardedHeaders to be in
+// front of it, or every caller shares the proxy's address and one bucket.
+static RateLimitPartition<string> PartitionByCaller(HttpContext http, int permitsPerMinute)
+{
+    return RateLimitPartition.GetFixedWindowLimiter(
+        http.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = permitsPerMinute,
+            Window = TimeSpan.FromMinutes(1),
+        });
+}
 
 // Makes the implicit entry-point class nameable by WebApplicationFactory-based tests
 // (which see it via InternalsVisibleTo in the csproj).

@@ -49,7 +49,8 @@ internal static class EnrollmentEndpoints
 
                 return TypedResults.Ok(new PairingCodeResponse(code.Code, code.ExpiresAt));
             })
-            .ProducesProblem(StatusCodes.Status400BadRequest);
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .RequireRateLimiting(RateLimitPolicies.Authentication);
 
         // Polled by the enrolling Daemon while its code is displayed to the user.
         app.MapGet(
@@ -69,7 +70,8 @@ internal static class EnrollmentEndpoints
                 return pairingCode.ClaimedRegistrationId is Guid registrationId
                     ? TypedResults.Ok(new EnrollmentStatusResponse(registrationId))
                     : TypedResults.NoContent();
-            });
+            })
+            .RequireRateLimiting(RateLimitPolicies.EnrollmentPolling);
 
         // Called by a logged-in user typing in the code the Daemon displayed.
         app.MapPost(

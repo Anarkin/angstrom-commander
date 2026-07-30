@@ -17,6 +17,9 @@ Content-Type: application/json
 ### 2. Log in — everything below picks the token up from this response
 #    NOTE: after `docker compose down -v` the accounts are gone — re-send
 #    register + login so you're not holding a token for a deleted user.
+#    Five wrong passwords lock the account for five minutes (401 either way,
+#    with the reason in the ProblemDetails body), and this endpoint answers at
+#    most 20 times a minute per caller — send it in a loop and you get 429.
 # @name login
 POST {{server}}/api/auth/login
 Content-Type: application/json
