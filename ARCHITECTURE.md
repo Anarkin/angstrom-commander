@@ -120,7 +120,7 @@ See the "Provisioning & deployment" diagram at the bottom for how the pieces fit
 
 > **Estimated July 2026, West Europe. Keep this current** — re-check it whenever the hosting choices, SKUs, or replica counts change, and refresh the rates periodically even when nothing changes: Azure prices drift, and a stale table here is more misleading than no table. Same living-document rule as the rest of this file. Only permanent free allowances are counted (never new-customer trials, which expire and would make the numbers lie later).
 
-Assumes Container Apps *active* billing rates, one enrolled Daemon, and light personal traffic. The free grant of 180,000 vCPU-seconds + 360,000 GiB-seconds is **per subscription per month** and shared by every environment, so it is applied to prod below and the other environments pay from their first second.
+Assumes Container Apps *active* billing rates, one enrolled Daemon, and light personal traffic. The free grant of 180,000 vCPU-seconds + 360,000 GiB-seconds is **per subscription per month** and shared by every environment: it is worth a fixed ≈$5.40/month, is consumed by whichever environment bills first, and is modelled against prod below so prod's figure is honest and the others are conservative. Prod therefore looks cheaper than 2× test despite running 2× the hours — its ungranted compute is ≈$19.70 for 730 h against test's ≈$9.85 for 365 h.
 
 | Component | prod (always on) | test (12 h/day ≈ 365 h) | demo123 (3-day stamp, ~2 h used) |
 | --- | --- | --- | --- |
