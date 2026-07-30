@@ -117,7 +117,13 @@ internal static class RelayEndpoints
                     return MachineOffline();
                 }
 
-                var transferId = transfers.Create(writerRegistrationId: registrationId, readerRegistrationId: null);
+                if (transfers.TryCreate(
+                        GetUserId(http), writerRegistrationId: registrationId, readerRegistrationId: null)
+                    is not Guid transferId)
+                {
+                    return TooManyTransfers();
+                }
+
                 DownloadFileResponse response;
                 try
                 {
@@ -176,7 +182,13 @@ internal static class RelayEndpoints
                     return MachineOffline();
                 }
 
-                var transferId = transfers.Create(writerRegistrationId: null, readerRegistrationId: registrationId);
+                if (transfers.TryCreate(
+                        GetUserId(http), writerRegistrationId: null, readerRegistrationId: registrationId)
+                    is not Guid transferId)
+                {
+                    return TooManyTransfers();
+                }
+
                 try
                 {
                     // The Daemon validates and answers before pulling anything, so a rejected
@@ -253,8 +265,15 @@ internal static class RelayEndpoints
                     return MachineOffline();
                 }
 
-                var transferId = transfers.Create(
-                    writerRegistrationId: sourceRegistrationId, readerRegistrationId: targetRegistrationId);
+                if (transfers.TryCreate(
+                        GetUserId(http),
+                        writerRegistrationId: sourceRegistrationId,
+                        readerRegistrationId: targetRegistrationId)
+                    is not Guid transferId)
+                {
+                    return TooManyTransfers();
+                }
+
                 try
                 {
                     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -409,6 +428,13 @@ internal static class RelayEndpoints
     {
         return TypedResults.Problem(
             detail: "The machine is not connected right now.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    private static ProblemHttpResult TooManyTransfers()
+    {
+        return TypedResults.Problem(
+            detail: "Too many transfers are already in progress. Wait for one to finish.",
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 

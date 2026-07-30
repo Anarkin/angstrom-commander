@@ -17,22 +17,36 @@ namespace AngstromCommander.Server.Relay;
 internal sealed class FileTransferRegistry
 {
     private const int MaxBufferedChunks = 16;
+    private const int MaxTransfersPerUser = 16;
 
     private readonly ConcurrentDictionary<Guid, PendingTransfer> _transfers = new();
 
     /// <summary>
-    /// Registers a transfer. A null registration id means that side is the HTTP request/response
-    /// rather than a Daemon.
+    /// Registers a transfer, or returns null when the user already has as many in flight as they
+    /// are allowed. A null registration id means that side is the HTTP request/response rather
+    /// than a Daemon.
     /// </summary>
-    public Guid Create(Guid? writerRegistrationId, Guid? readerRegistrationId)
+    /// <remarks>
+    /// The cap is what keeps memory bounded: every live transfer holds a bounded channel, so
+    /// unlimited transfers is unlimited memory on a Server shared with everyone else's machines.
+    /// Counting and inserting are not one atomic step, so a burst of simultaneous requests can
+    /// land a little over the line — near enough for a resource guard, and far from unbounded.
+    /// </remarks>
+    public Guid? TryCreate(Guid userId, Guid? writerRegistrationId, Guid? readerRegistrationId)
     {
+        if (this._transfers.Count(entry => entry.Value.UserId == userId) >= MaxTransfersPerUser)
+        {
+            return null;
+        }
+
         var transferId = Guid.NewGuid();
         var channel = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(MaxBufferedChunks)
         {
             SingleReader = true,
             SingleWriter = true,
         });
-        this._transfers[transferId] = new PendingTransfer(writerRegistrationId, readerRegistrationId, channel);
+        this._transfers[transferId] = new PendingTransfer(
+            userId, writerRegistrationId, readerRegistrationId, channel);
         return transferId;
     }
 
@@ -122,6 +136,7 @@ internal sealed class FileTransferRegistry
     }
 
     private sealed record PendingTransfer(
+        Guid UserId,
         Guid? WriterRegistrationId,
         Guid? ReaderRegistrationId,
         Channel<byte[]> Channel)
