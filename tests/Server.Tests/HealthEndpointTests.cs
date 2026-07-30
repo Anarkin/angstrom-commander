@@ -7,7 +7,7 @@ public class HealthEndpointTests
     [Fact]
     public async Task HealthzReturnsOk()
     {
-        // No database in this test: health must not depend on one.
+        // No database and no signing key in this test: health must not depend on either.
         using var baseFactory = new WebApplicationFactory<Program>();
         using var factory = baseFactory.WithWebHostBuilder(
             static builder => builder.UseSetting("Database:MigrateOnStartup", "false"));

@@ -1,4 +1,3 @@
-using System.Text;
 using AngstromCommander.Server.Auth;
 using AngstromCommander.Server.Data;
 using AngstromCommander.Server.Enrollment;
@@ -35,7 +34,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         {
             ValidIssuer = authOptions.Issuer,
             ValidAudience = authOptions.Audience,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(authOptions.JwtSigningKey)),
+            IssuerSigningKey = TokenService.CreateSigningKey(authOptions.JwtSigningKey),
             ClockSkew = TimeSpan.FromSeconds(30),
         };
         options.Events = new JwtBearerEvents
