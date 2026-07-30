@@ -64,6 +64,7 @@ Diagrams: see the Diagrams section at the bottom.
   - Works through NAT/firewalls because an established TCP connection is bidirectional regardless of who initiated it
   - Socket ownership is the Server's only per-replica state: with multiple replicas, a connection registry (Daemon → owning replica, in Redis) routes each request directly to the replica holding that Daemon's socket — NOT SignalR's Redis backplane, which broadcasts every message to every replica and collapses under this pattern. v1 runs one replica with an in-process map, but socket lookup sits behind an interface from the first commit so the registry is a swap, not surgery
   - File transfers stream through in chunks (never buffered whole); bulk transfers may get a second dedicated connection later
+  - Every transfer is one bounded channel with a single writer and reader, which is what makes the dual pane's copy cheap: source Daemon → Server → target Daemon with no client round trip. A download is that channel read by the HTTP response, an upload is it written by the HTTP request. Backpressure is inherent — a slow reader slows the sender. (Note SignalR cannot push a stream to a client, so a receiving Daemon is told a transfer is waiting and pulls it.)
 - MCP endpoint — the file-op tool surface exposed as a remote MCP server (Streamable HTTP, e.g. `api.<domain>.com/mcp`):
   - Same authorized, relayed, sandboxed ops as the REST API — MCP is a protocol adapter over one tool surface, never a second implementation
   - Auth: OAuth 2.1 (authorization code + PKCE, dynamic client registration; OpenIddict) with Angstrom Commander login + consent pages; personal access tokens as the simpler first step. Both land in the sessions table (see the DB bullets below)
@@ -72,7 +73,7 @@ Diagrams: see the Diagrams section at the bottom.
   - Daemon registrations: display name, Daemon public key, platform/OS/version, created / last_seen / revoked timestamps
   - Sessions — WebClient/MobileClient logins, PATs, and OAuth grants for MCP clients: hashed token, device/client info, scopes, timestamps + revocation (enables an "active sessions" page covering humans and AI alike)
   - Short-lived one-time enrollment (pairing) codes
-- NOT in the DB: file data/metadata, the Daemon's FS config (allowed roots are Daemon-side), and ephemeral state (Daemon online-status, active relay sessions live in memory/Redis)
+- NOT in the DB: file data/metadata, the Daemon's FS config (allowed roots, and whether each is writable, are Daemon-side), and ephemeral state (Daemon online-status, active relay sessions live in memory/Redis)
 - Reached via fixed DNS name (e.g. `api.<domain>.com`); environments = subdomains (`api.qa...`); feature-branch demos use Azure's auto-generated Container Apps URLs
 
 **WebClient & MobileClient**
@@ -92,7 +93,7 @@ Diagrams: see the Diagrams section at the bottom.
 - TLS everywhere; WebClient and MobileClient authenticate with JWT access tokens + hashed refresh tokens (revocable per device)
 - Daemon identity = keypair generated at enrollment; the Server stores only the public key (DB leak ≠ Daemon impersonation); revoking a registration kills that machine's access
 - Enrollment: Daemon shows a short-lived one-time pairing code, user enters it in a logged-in WebClient or MobileClient (TV-pairing style)
-- Path sandboxing in the Daemon: canonicalize all client-supplied paths, enforce allowed roots (no traversal)
+- Path sandboxing in the Daemon: canonicalize all client-supplied paths, enforce allowed roots (no traversal). Each root carries a writable flag and read-only is the default, so sharing a folder never implies permission to change it — writes resolve only against writable roots
 - AI access: the Agent and third-party MCP clients act only through the Server's MCP endpoint with user-scoped tokens (OAuth 2.1 or PATs) — same authorization and Daemon sandbox as any client, no extra access path; mutating ops additionally require explicit user confirmation; every AI session is listed and revocable on the "active sessions" page
 
 ## Scaling

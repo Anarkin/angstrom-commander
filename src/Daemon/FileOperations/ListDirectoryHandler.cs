@@ -6,7 +6,7 @@ internal sealed class ListDirectoryHandler(PathSandbox sandbox)
 {
     public ListDirectoryResponse Handle(ListDirectoryRequest request)
     {
-        if (!sandbox.TryResolve(request.Path, out var resolvedPath))
+        if (!sandbox.TryResolveForRead(request.Path, out var resolvedPath))
         {
             return ListDirectoryResponse.ForError("Path is outside the allowed roots.");
         }

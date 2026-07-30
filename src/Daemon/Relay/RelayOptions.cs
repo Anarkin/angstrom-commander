@@ -1,3 +1,5 @@
+using AngstromCommander.Daemon.FileOperations;
+
 namespace AngstromCommander.Daemon.Relay;
 
 internal sealed class RelayOptions
@@ -9,5 +11,6 @@ internal sealed class RelayOptions
     /// <summary>Where the keypair and registration state live.</summary>
     public string StateDirectory { get; set; } = "state";
 
-    public IList<string> AllowedRoots { get; } = [];
+    /// <summary>The directories this machine shares; nothing outside them is reachable.</summary>
+    public IList<AllowedRoot> AllowedRoots { get; } = [];
 }

@@ -21,6 +21,7 @@ internal sealed partial class DaemonRelayService(
     ServerApiClient serverApi,
     ListDirectoryHandler listDirectoryHandler,
     DownloadFileHandler downloadFileHandler,
+    UploadFileHandler uploadFileHandler,
     ILogger<DaemonRelayService> logger) : BackgroundService
 {
     private const int DownloadChunkBytes = 64 * 1024;
@@ -62,6 +63,21 @@ internal sealed partial class DaemonRelayService(
                     // and disposes the stream.
                     var chunks = ReadFileChunksAsync(file, stoppingToken);
                     _ = this.PumpFileAsync(connection, request.TransferId, chunks, stoppingToken);
+                }
+
+                return response;
+            });
+
+        connection.On<UploadFileRequest, UploadFileResponse>(
+            DaemonHubMethods.UploadFile,
+            request =>
+            {
+                var response = uploadFileHandler.Accept(request, out var resolvedPath);
+                if (response.Error is null)
+                {
+                    // Accepted: pull the bytes ourselves (the Server cannot push a stream to us)
+                    // and report completion when they are on disk.
+                    _ = this.PullFileAsync(connection, request, resolvedPath, stoppingToken);
                 }
 
                 return response;
@@ -137,6 +153,41 @@ internal sealed partial class DaemonRelayService(
         try
         {
             await connection.InvokeAsync(ServerHubMethods.UploadFileChunks, transferId, chunks, cancellationToken);
+        }
+        catch (Exception ex) when (ex is HubException or IOException or InvalidOperationException or OperationCanceledException)
+        {
+            LogTransferAborted(logger, transferId, ex);
+        }
+    }
+
+    private async Task PullFileAsync(
+        HubConnection connection,
+        UploadFileRequest request,
+        string resolvedPath,
+        CancellationToken cancellationToken)
+    {
+        var transferId = request.TransferId;
+        string? error = null;
+        try
+        {
+            await using var file = UploadFileHandler.OpenForWriting(resolvedPath, request.Overwrite);
+            var chunks = connection.StreamAsync<byte[]>(
+                ServerHubMethods.DownloadFileChunks, transferId, cancellationToken);
+            await foreach (var chunk in chunks.WithCancellation(cancellationToken))
+            {
+                await file.WriteAsync(chunk, cancellationToken);
+            }
+        }
+        catch (Exception ex) when (ex is HubException or IOException or UnauthorizedAccessException or InvalidOperationException or OperationCanceledException)
+        {
+            LogTransferAborted(logger, transferId, ex);
+            error = ex.Message;
+        }
+
+        try
+        {
+            await connection.InvokeAsync(
+                ServerHubMethods.CompleteTransfer, transferId, error, cancellationToken);
         }
         catch (Exception ex) when (ex is HubException or IOException or InvalidOperationException or OperationCanceledException)
         {

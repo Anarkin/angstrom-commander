@@ -38,6 +38,8 @@ export class ApiError extends Error {
 interface RequestOptions {
   method?: "GET" | "POST";
   body?: unknown;
+  /** Sent as-is instead of JSON — file uploads stream their bytes this way. */
+  rawBody?: Blob;
   /** Send without the bearer token (registration, login, and the Daemon-facing endpoints). */
   anonymous?: boolean;
 }
@@ -49,6 +51,8 @@ export async function send(
   const headers = new Headers();
   if (options.body !== undefined) {
     headers.set("Content-Type", "application/json");
+  } else if (options.rawBody !== undefined) {
+    headers.set("Content-Type", "application/octet-stream");
   }
 
   if (options.anonymous !== true && accessToken !== null) {
@@ -58,7 +62,10 @@ export async function send(
   const response = await fetch(new URL(path, serverUrl), {
     method: options.method ?? "GET",
     headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    body:
+      options.body === undefined
+        ? options.rawBody
+        : JSON.stringify(options.body),
   });
 
   if (!response.ok) {

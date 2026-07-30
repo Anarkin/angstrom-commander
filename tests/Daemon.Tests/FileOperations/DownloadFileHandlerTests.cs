@@ -13,7 +13,7 @@ public class DownloadFileHandlerTests
         {
             var path = Path.Combine(root.FullName, "payload.bin");
             File.WriteAllBytes(path, [1, 2, 3, 4, 5]);
-            var handler = new DownloadFileHandler(new PathSandbox([root.FullName]));
+            var handler = new DownloadFileHandler(new PathSandbox([new AllowedRoot { Path = root.FullName }]));
 
             var response = handler.Open(new DownloadFileRequest(Guid.NewGuid(), path), out var stream);
 
@@ -48,7 +48,7 @@ public class DownloadFileHandlerTests
     public void ReportsMissingFile()
     {
         var root = Path.Combine(Path.GetTempPath(), "ac-missing-" + Guid.NewGuid());
-        var handler = new DownloadFileHandler(new PathSandbox([root]));
+        var handler = new DownloadFileHandler(new PathSandbox([new AllowedRoot { Path = root }]));
 
         var response = handler.Open(
             new DownloadFileRequest(Guid.NewGuid(), Path.Combine(root, "nope.txt")), out var stream);

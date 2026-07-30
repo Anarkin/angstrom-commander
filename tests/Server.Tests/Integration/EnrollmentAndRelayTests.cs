@@ -252,6 +252,137 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
         }
     }
 
+    [Fact]
+    public async Task UploadStreamsRequestBodyToTheMachine()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+        using var userClient = factory.CreateClient();
+        var userToken = await RegisterAndLoginAsync(userClient, "up@example.com");
+        userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+
+        var payload = new byte[300_000];
+        RandomNumberGenerator.Fill(payload);
+        var received = new MemoryStream();
+
+        var (registrationId, connection) = await ConnectDaemonAsync(factory, userClient, conn =>
+            conn.On<UploadFileRequest, UploadFileResponse>(
+                DaemonHubMethods.UploadFile,
+                request =>
+                {
+                    // Stand in for the real Daemon: pull the bytes, then report completion.
+                    _ = Task.Run(async () =>
+                    {
+                        await foreach (var chunk in conn.StreamAsync<byte[]>(
+                            ServerHubMethods.DownloadFileChunks, request.TransferId))
+                        {
+                            received.Write(chunk);
+                        }
+
+                        await conn.InvokeAsync(ServerHubMethods.CompleteTransfer, request.TransferId, null);
+                    });
+                    return UploadFileResponse.ForSuccess();
+                }));
+
+        await using (connection)
+        {
+            using var content = new ByteArrayContent(payload);
+            using var response = await userClient.PostAsync(
+                new Uri($"/api/daemons/{registrationId}/upload?path=/uploads/blob.bin", UriKind.Relative), content);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Assert.Fail(await response.Content.ReadAsStringAsync());
+            }
+
+            var transferred = await response.Content.ReadFromJsonAsync<TransferredResponse>();
+            Assert.Equal(payload.Length, transferred?.BytesTransferred);
+            Assert.Equal(payload, received.ToArray());
+        }
+    }
+
+    [Fact]
+    public async Task UploadSurfacesRefusalFromTheMachine()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+        using var userClient = factory.CreateClient();
+        var userToken = await RegisterAndLoginAsync(userClient, "upfail@example.com");
+        userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+
+        var (registrationId, connection) = await ConnectDaemonAsync(factory, userClient, static conn =>
+            conn.On<UploadFileRequest, UploadFileResponse>(
+                DaemonHubMethods.UploadFile,
+                static _ => UploadFileResponse.ForError("Path is not inside a writable root.")));
+
+        await using (connection)
+        {
+            using var content = new ByteArrayContent([1, 2, 3]);
+            using var response = await userClient.PostAsync(
+                new Uri($"/api/daemons/{registrationId}/upload?path=/data/blocked.bin", UriKind.Relative), content);
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task CopyMovesBytesBetweenTwoMachines()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+        using var userClient = factory.CreateClient();
+        var userToken = await RegisterAndLoginAsync(userClient, "copy@example.com");
+        userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+
+        var payload = new byte[200_000];
+        RandomNumberGenerator.Fill(payload);
+        var received = new MemoryStream();
+
+        // The source machine serves the file...
+        var (sourceId, sourceConnection) = await ConnectDaemonAsync(factory, userClient, conn =>
+            conn.On<DownloadFileRequest, DownloadFileResponse>(
+                DaemonHubMethods.DownloadFile,
+                request =>
+                {
+                    _ = Task.Run(() => conn.InvokeAsync(
+                        ServerHubMethods.UploadFileChunks, request.TransferId, ChunksOf(payload)));
+                    return DownloadFileResponse.ForFile("blob.bin", payload.Length);
+                }));
+
+        // ...and the target machine receives it.
+        var (targetId, targetConnection) = await ConnectDaemonAsync(factory, userClient, conn =>
+            conn.On<UploadFileRequest, UploadFileResponse>(
+                DaemonHubMethods.UploadFile,
+                request =>
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        await foreach (var chunk in conn.StreamAsync<byte[]>(
+                            ServerHubMethods.DownloadFileChunks, request.TransferId))
+                        {
+                            received.Write(chunk);
+                        }
+
+                        await conn.InvokeAsync(ServerHubMethods.CompleteTransfer, request.TransferId, null);
+                    });
+                    return UploadFileResponse.ForSuccess();
+                }));
+
+        await using (sourceConnection)
+        await using (targetConnection)
+        {
+            using var response = await userClient.PostAsync(
+                new Uri(
+                    $"/api/daemons/{sourceId}/copy-to/{targetId}?sourcePath=/data/blob.bin&targetPath=/uploads/blob.bin",
+                    UriKind.Relative),
+                content: null);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Assert.Fail(await response.Content.ReadAsStringAsync());
+            }
+
+            Assert.Equal(payload, received.ToArray());
+        }
+    }
+
     private static async IAsyncEnumerable<byte[]> ChunksOf(byte[] payload)
     {
         const int chunkSize = 64 * 1024;
@@ -348,6 +479,8 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
     private sealed record TokenResponse(string AccessToken);
 
     private sealed record LoginResponse(string AccessToken);
+
+    private sealed record TransferredResponse(long BytesTransferred);
 
     private sealed record MachineResponse(
         Guid RegistrationId, string DisplayName, string Platform, DateTimeOffset CreatedAt, DateTimeOffset? LastSeenAt, bool Online);

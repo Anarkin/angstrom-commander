@@ -39,17 +39,26 @@ services:
     environment:
       Relay__ServerUrl: "http://server:8080"
       Relay__StateDirectory: "/state"
-      Relay__AllowedRoots__0: "/data"
-      # The container's whole filesystem — a dev-only "share everything" example.
-      Relay__AllowedRoots__1: "/"
+      # The repo, shared read-only.
+      Relay__AllowedRoots__0__Path: "/data"
+      Relay__AllowedRoots__0__Writable: "false"
+      # A writable share, so uploads and machine-to-machine copies have somewhere to land.
+      Relay__AllowedRoots__1__Path: "/uploads"
+      Relay__AllowedRoots__1__Writable: "true"
+      # The container's whole filesystem — a dev-only "share everything" example, read-only.
+      Relay__AllowedRoots__2__Path: "/"
+      Relay__AllowedRoots__2__Writable: "false"
     volumes:
       # Sample sandboxed directory: the repo itself, read-only.
       - ./:/data:ro
       # Machine identity (keypair + registration) survives restarts.
       - daemon-state:/state
+      # Somewhere writable to receive uploads and copies.
+      - daemon-uploads:/uploads
     depends_on:
       server:
         condition: service_healthy
 
 volumes:
   daemon-state:
+  daemon-uploads:

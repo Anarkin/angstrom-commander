@@ -13,7 +13,7 @@ internal sealed class DownloadFileHandler(PathSandbox sandbox)
     public DownloadFileResponse Open(DownloadFileRequest request, out FileStream? stream)
     {
         stream = null;
-        if (!sandbox.TryResolve(request.Path, out var resolvedPath))
+        if (!sandbox.TryResolveForRead(request.Path, out var resolvedPath))
         {
             return DownloadFileResponse.ForError("Path is outside the allowed roots.");
         }

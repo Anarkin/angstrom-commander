@@ -13,7 +13,7 @@ public class ListDirectoryHandlerTests
         {
             File.WriteAllText(Path.Combine(root.FullName, "hello.txt"), "hi");
             Directory.CreateDirectory(Path.Combine(root.FullName, "sub"));
-            var handler = new ListDirectoryHandler(new PathSandbox([root.FullName]));
+            var handler = new ListDirectoryHandler(new PathSandbox([new AllowedRoot { Path = root.FullName }]));
 
             var response = handler.Handle(new ListDirectoryRequest(root.FullName));
 
@@ -47,7 +47,7 @@ public class ListDirectoryHandlerTests
     public void ReportsMissingDirectory()
     {
         var root = Path.Combine(Path.GetTempPath(), "ac-does-not-exist-" + Guid.NewGuid());
-        var handler = new ListDirectoryHandler(new PathSandbox([root]));
+        var handler = new ListDirectoryHandler(new PathSandbox([new AllowedRoot { Path = root }]));
 
         var response = handler.Handle(new ListDirectoryRequest(root));
 

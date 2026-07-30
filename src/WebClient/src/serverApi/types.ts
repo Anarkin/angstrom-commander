@@ -10,6 +10,7 @@ export type DirectoryEntry = Schemas["DirectoryEntry"];
 export type LoginResponse = Schemas["LoginResponse"];
 export type RegisterResponse = Schemas["RegisterResponse"];
 export type ClaimResponse = Schemas["ClaimResponse"];
+export type Transfer = Schemas["TransferResponse"];
 export type ProblemDetails = Schemas["ProblemDetails"];
 export type ValidationProblemDetails = Schemas["HttpValidationProblemDetails"];
 

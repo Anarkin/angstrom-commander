@@ -61,6 +61,29 @@ Authorization: Bearer {{token}}
 GET {{server}}/api/daemons/{{registrationId}}/download?path=/data/README.md
 Authorization: Bearer {{token}}
 
+### 7. Upload a file (streams request body -> Server -> Daemon; /uploads is the writable root)
+POST {{server}}/api/daemons/{{registrationId}}/upload?path=/uploads/hello.txt&overwrite=true
+Authorization: Bearer {{token}}
+Content-Type: application/octet-stream
+
+Hello from Server.http
+
+### Uploading into a read-only root is refused → 400
+POST {{server}}/api/daemons/{{registrationId}}/upload?path=/data/hello.txt
+Authorization: Bearer {{token}}
+Content-Type: application/octet-stream
+
+nope
+
+### Confirm the upload landed
+GET {{server}}/api/daemons/{{registrationId}}/list?path=/uploads
+Authorization: Bearer {{token}}
+
+### 8. Copy a file machine-to-machine (source and target may be the same machine)
+#    Bytes go source -> Server -> target, never buffered whole, no client round trip.
+POST {{server}}/api/daemons/{{registrationId}}/copy-to/{{registrationId}}?sourcePath=/data/README.md&targetPath=/uploads/README-copy.md&overwrite=true
+Authorization: Bearer {{token}}
+
 ### Sandbox refusal demo — NOTE: compose currently allows "/" too, so these return 200.
 ### To watch the sandbox refuse (400), remove Relay__AllowedRoots__1 from docker-compose.yml.
 GET {{server}}/api/daemons/{{registrationId}}/list?path=/etc

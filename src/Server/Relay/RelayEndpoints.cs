@@ -9,6 +9,8 @@ namespace AngstromCommander.Server.Relay;
 
 internal static class RelayEndpoints
 {
+    private const int UploadChunkBytes = 64 * 1024;
+
     private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ChunkTimeout = TimeSpan.FromSeconds(60);
 
@@ -115,7 +117,7 @@ internal static class RelayEndpoints
                     return MachineOffline();
                 }
 
-                var transferId = transfers.Create(registrationId);
+                var transferId = transfers.Create(writerRegistrationId: registrationId, readerRegistrationId: null);
                 DownloadFileResponse response;
                 try
                 {
@@ -151,7 +153,192 @@ internal static class RelayEndpoints
             .ProducesRelayProblems()
             .RequireAuthorization(AuthPolicies.User);
 
+        app.MapPost(
+            "/api/daemons/{registrationId:guid}/upload",
+            static async Task<Results<Ok<TransferResponse>, ProblemHttpResult>> (
+                Guid registrationId,
+                string path,
+                bool? overwrite,
+                HttpContext http,
+                AppDbContext db,
+                IDaemonConnectionRegistry registry,
+                FileTransferRegistry transfers,
+                IHubContext<DaemonHub> hub,
+                CancellationToken cancellationToken) =>
+            {
+                if (!await OwnsMachineAsync(db, http, registrationId, cancellationToken))
+                {
+                    return NoSuchMachine();
+                }
+
+                if (!registry.TryGetConnection(registrationId.ToString(), out var connectionId))
+                {
+                    return MachineOffline();
+                }
+
+                var transferId = transfers.Create(writerRegistrationId: null, readerRegistrationId: registrationId);
+                try
+                {
+                    // The Daemon validates and answers before pulling anything, so a rejected
+                    // path fails fast instead of after a long body upload.
+                    UploadFileResponse accepted;
+                    using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                    {
+                        timeout.CancelAfter(OperationTimeout);
+                        accepted = await hub.Clients.Client(connectionId)
+                            .InvokeAsync<UploadFileResponse>(
+                                DaemonHubMethods.UploadFile,
+                                new UploadFileRequest(transferId, path, overwrite ?? false),
+                                timeout.Token);
+                    }
+
+                    if (accepted.Error is not null)
+                    {
+                        return TypedResults.Problem(
+                            detail: accepted.Error, statusCode: StatusCodes.Status400BadRequest);
+                    }
+
+                    transfers.TryGetChannel(transferId, out var channel);
+                    var bytesTransferred = await PumpRequestBodyAsync(http.Request.Body, channel, cancellationToken);
+
+                    // The receiver reports when the bytes are actually on disk.
+                    var failure = await transfers.Completion(transferId).WaitAsync(ChunkTimeout, cancellationToken);
+                    if (failure is not null)
+                    {
+                        return TypedResults.Problem(
+                            detail: failure, statusCode: StatusCodes.Status400BadRequest);
+                    }
+
+                    return TypedResults.Ok(new TransferResponse(bytesTransferred));
+                }
+                catch (Exception ex) when (ex is IOException or OperationCanceledException or TimeoutException)
+                {
+                    return MachineSilent();
+                }
+                finally
+                {
+                    transfers.Remove(transferId);
+                }
+            })
+            .Accepts<Stream>("application/octet-stream")
+            .ProducesRelayProblems()
+            .RequireAuthorization(AuthPolicies.User);
+
+        // The dual-pane move: bytes go source Daemon -> Server -> target Daemon without ever
+        // being buffered whole, and without a round trip through the client.
+        app.MapPost(
+            "/api/daemons/{sourceRegistrationId:guid}/copy-to/{targetRegistrationId:guid}",
+            static async Task<Results<Ok<TransferResponse>, ProblemHttpResult>> (
+                Guid sourceRegistrationId,
+                Guid targetRegistrationId,
+                string sourcePath,
+                string targetPath,
+                bool? overwrite,
+                HttpContext http,
+                AppDbContext db,
+                IDaemonConnectionRegistry registry,
+                FileTransferRegistry transfers,
+                IHubContext<DaemonHub> hub,
+                CancellationToken cancellationToken) =>
+            {
+                if (!await OwnsMachineAsync(db, http, sourceRegistrationId, cancellationToken)
+                    || !await OwnsMachineAsync(db, http, targetRegistrationId, cancellationToken))
+                {
+                    return NoSuchMachine();
+                }
+
+                if (!registry.TryGetConnection(sourceRegistrationId.ToString(), out var sourceConnectionId)
+                    || !registry.TryGetConnection(targetRegistrationId.ToString(), out var targetConnectionId))
+                {
+                    return MachineOffline();
+                }
+
+                var transferId = transfers.Create(
+                    writerRegistrationId: sourceRegistrationId, readerRegistrationId: targetRegistrationId);
+                try
+                {
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    timeout.CancelAfter(OperationTimeout);
+
+                    var opened = await hub.Clients.Client(sourceConnectionId)
+                        .InvokeAsync<DownloadFileResponse>(
+                            DaemonHubMethods.DownloadFile,
+                            new DownloadFileRequest(transferId, sourcePath),
+                            timeout.Token);
+                    if (opened.Error is not null || opened.FileName is null)
+                    {
+                        return TypedResults.Problem(
+                            detail: opened.Error ?? "The source machine sent no file metadata.",
+                            statusCode: StatusCodes.Status400BadRequest);
+                    }
+
+                    var accepted = await hub.Clients.Client(targetConnectionId)
+                        .InvokeAsync<UploadFileResponse>(
+                            DaemonHubMethods.UploadFile,
+                            new UploadFileRequest(transferId, targetPath, overwrite ?? false),
+                            timeout.Token);
+                    if (accepted.Error is not null)
+                    {
+                        return TypedResults.Problem(
+                            detail: accepted.Error, statusCode: StatusCodes.Status400BadRequest);
+                    }
+
+                    var failure = await transfers.Completion(transferId).WaitAsync(ChunkTimeout, cancellationToken);
+                    if (failure is not null)
+                    {
+                        return TypedResults.Problem(
+                            detail: failure, statusCode: StatusCodes.Status400BadRequest);
+                    }
+
+                    return TypedResults.Ok(new TransferResponse(opened.SizeBytes ?? 0));
+                }
+                catch (Exception ex) when (ex is IOException or OperationCanceledException or TimeoutException)
+                {
+                    return MachineSilent();
+                }
+                finally
+                {
+                    transfers.Remove(transferId);
+                }
+            })
+            .ProducesRelayProblems()
+            .RequireAuthorization(AuthPolicies.User);
+
         return app;
+    }
+
+    private static async Task<long> PumpRequestBodyAsync(
+        Stream body,
+        System.Threading.Channels.Channel<byte[]> channel,
+        CancellationToken cancellationToken)
+    {
+        var total = 0L;
+        try
+        {
+            while (true)
+            {
+                var buffer = new byte[UploadChunkBytes];
+                var read = await body.ReadAtLeastAsync(
+                    buffer, UploadChunkBytes, throwOnEndOfStream: false, cancellationToken);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                total += read;
+                await channel.Writer.WriteAsync(
+                    read == UploadChunkBytes ? buffer : buffer[..read], cancellationToken);
+            }
+
+            channel.Writer.TryComplete();
+        }
+        catch (Exception ex)
+        {
+            channel.Writer.TryComplete(ex);
+            throw;
+        }
+
+        return total;
     }
 
     /// <summary>The problem responses every relayed file operation can answer with.</summary>
@@ -230,6 +417,9 @@ internal static class RelayEndpoints
         return Guid.Parse(http.User.FindFirst(AuthClaims.Subject)!.Value);
     }
 }
+
+/// <summary>How many bytes a completed transfer moved.</summary>
+internal sealed record TransferResponse(long BytesTransferred);
 
 /// <summary>One of the caller's paired machines.</summary>
 internal sealed record MachineResponse(

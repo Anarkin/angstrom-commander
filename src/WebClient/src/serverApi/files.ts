@@ -1,5 +1,5 @@
 import { send, sendForJson } from "./http";
-import type { DirectoryEntry, Machine } from "./types";
+import type { DirectoryEntry, Machine, Transfer } from "./types";
 
 export async function listMachines(): Promise<Machine[]> {
   return await sendForJson<Machine[]>("/api/daemons");
@@ -41,6 +41,43 @@ export async function downloadFile(
       baseNameOf(path),
     blob: await response.blob(),
   };
+}
+
+/** Streams a file to a machine, into one of its writable roots. */
+export async function uploadFile(
+  registrationId: string,
+  path: string,
+  content: Blob,
+  overwrite = false,
+): Promise<Transfer> {
+  const query = new URLSearchParams({ path, overwrite: String(overwrite) });
+  return await sendForJson<Transfer>(
+    `/api/daemons/${registrationId}/upload?${query.toString()}`,
+    { method: "POST", rawBody: content },
+  );
+}
+
+/**
+ * Copies a file directly between two machines. The bytes go source -> Server -> target without
+ * a round trip through the browser, so this is what the dual pane's copy action uses rather
+ * than a download followed by an upload.
+ */
+export async function copyBetweenMachines(
+  sourceRegistrationId: string,
+  targetRegistrationId: string,
+  sourcePath: string,
+  targetPath: string,
+  overwrite = false,
+): Promise<Transfer> {
+  const query = new URLSearchParams({
+    sourcePath,
+    targetPath,
+    overwrite: String(overwrite),
+  });
+  return await sendForJson<Transfer>(
+    `/api/daemons/${sourceRegistrationId}/copy-to/${targetRegistrationId}?${query.toString()}`,
+    { method: "POST" },
+  );
 }
 
 function fileNameFrom(contentDisposition: string | null): string | null {

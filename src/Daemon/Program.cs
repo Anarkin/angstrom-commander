@@ -11,6 +11,7 @@ builder.Services.AddSingleton(static sp =>
     new PathSandbox(sp.GetRequiredService<IOptions<RelayOptions>>().Value.AllowedRoots));
 builder.Services.AddSingleton<ListDirectoryHandler>();
 builder.Services.AddSingleton<DownloadFileHandler>();
+builder.Services.AddSingleton<UploadFileHandler>();
 builder.Services.AddSingleton<DaemonIdentityStore>();
 builder.Services.AddHttpClient<ServerApiClient>(static (sp, client) =>
 {

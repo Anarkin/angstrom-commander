@@ -5,4 +5,5 @@ public static class DaemonHubMethods
 {
     public const string ListDirectory = "ListDirectory";
     public const string DownloadFile = "DownloadFile";
+    public const string UploadFile = "UploadFile";
 }

@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using AngstromCommander.Server.Auth;
 using AngstromCommander.Server.Data;
 using Microsoft.AspNetCore.Authorization;
@@ -24,7 +25,7 @@ internal sealed class DaemonHub(IDaemonConnectionRegistry registry, FileTransfer
     public async Task UploadFileChunks(Guid transferId, IAsyncEnumerable<byte[]> chunks)
     {
         var registrationId = this.GetRegistrationId();
-        if (registrationId is null || !transfers.TryGet(transferId, registrationId.Value, out var channel))
+        if (registrationId is null || !transfers.TryGetForWriter(transferId, registrationId.Value, out var channel))
         {
             throw new HubException("Unknown transfer.");
         }
@@ -50,6 +51,38 @@ internal sealed class DaemonHub(IDaemonConnectionRegistry registry, FileTransfer
         {
             channel.Writer.TryComplete(ex);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Server-to-client streaming: the receiving Daemon pulls the bytes of a file being sent to
+    /// it. SignalR cannot push a stream to a client, so the Daemon initiates this itself after
+    /// being told a transfer is waiting. Backpressure is the same bounded channel in reverse —
+    /// a Daemon writing slowly to disk slows the sender.
+    /// </summary>
+    public async IAsyncEnumerable<byte[]> DownloadFileChunks(
+        Guid transferId,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var registrationId = this.GetRegistrationId();
+        if (registrationId is null || !transfers.TryGetForReader(transferId, registrationId.Value, out var channel))
+        {
+            throw new HubException("Unknown transfer.");
+        }
+
+        await foreach (var chunk in channel.Reader.ReadAllAsync(cancellationToken))
+        {
+            yield return chunk;
+        }
+    }
+
+    /// <summary>Reported by a receiving Daemon once it has finished writing (or failed).</summary>
+    public void CompleteTransfer(Guid transferId, string? error)
+    {
+        var registrationId = this.GetRegistrationId();
+        if (registrationId is null || !transfers.TryComplete(transferId, registrationId.Value, error))
+        {
+            throw new HubException("Unknown transfer.");
         }
     }
 
