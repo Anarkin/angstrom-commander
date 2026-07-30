@@ -42,7 +42,10 @@ Heavy emphasis on guardrails across the whole repo: every cheap, automatable qua
 - TypeScript strict mode (no `any` escapes; `@typescript-eslint` recommended-type-checked rules)
 - ESLint + Prettier, enforced in CI (no warnings allowed, formatting is a build failure)
 
-**infra/**
+**Containers**
+- Server and Daemon images run as a non-root user; the mount points a Daemon writes to are created with that ownership so its volumes stay writable
+
+**infra/** (once it exists)
 - `terraform fmt` + `terraform validate` on every PR
 
 **Later (noted so they're not forgotten)**
@@ -188,7 +191,7 @@ One discount is deliberately left out of the figures above: Container Apps inclu
 
 - GitHub hosts the repo: <https://github.com/Anarkin/angstrom-commander> (private, personal account — free tier is ample for solo, incl. 2,000 Actions minutes/month)
 - CI/CD: GitHub Actions; `azd pipeline config` bootstraps the workflow + OIDC federated identity to Azure (no cloud secrets stored in GitHub)
-- Every PR runs the full guardrail suite: build (warnings = errors), tests, `dotnet format`, ESLint/Prettier, `terraform fmt`/`validate`
+- Every PR runs the full guardrail suite: build (warnings = errors), tests, `dotnet format`, ESLint/Prettier, contract-drift checks, and a compose smoke test that builds all three images and waits for the Daemon to reach the Server (`terraform fmt`/`validate` join it with `infra/`)
 - Later: PR-open spawns a demo env (`azd up` for `demo-prN`), PR-close tears it down
 
 ## Dev environment

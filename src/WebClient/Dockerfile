@@ -8,6 +8,8 @@ ARG VITE_SERVER_URL=http://localhost:5080
 ENV VITE_SERVER_URL=$VITE_SERVER_URL
 RUN npm run build
 
+# nginx's own model is a root master process with unprivileged workers, and this image only
+# serves the compose setup — real environments get the bundle from Static Web Apps.
 FROM nginx:1.29-alpine
 COPY src/WebClient/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /src/dist /usr/share/nginx/html

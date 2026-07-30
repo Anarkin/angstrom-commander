@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   dotnet:
     name: .NET build, format, test
@@ -64,3 +67,34 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  compose:
+    name: Images build and the stack comes up
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # `docker compose up` is the setup guide's headline command, so it is worth a gate:
+      # nothing else in CI touches the Dockerfiles or the wiring between the containers.
+      - name: Build the images
+        run: docker compose build
+
+      - name: Start the stack
+        run: docker compose up --detach --wait
+
+      - name: The Daemon reaches the Server and offers a pairing code
+        run: |
+          for _ in $(seq 1 30); do
+            if docker compose logs daemon | grep -q "PAIRING CODE"; then
+              echo "The Daemon enrolled and is waiting to be paired."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::The Daemon never printed a pairing code."
+          docker compose logs
+          exit 1
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose down --volumes
