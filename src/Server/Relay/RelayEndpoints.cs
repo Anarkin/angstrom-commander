@@ -326,8 +326,15 @@ internal static class RelayEndpoints
                 }
 
                 total += read;
+
+                // Rolling per-chunk timeout, the mirror of the one on the download side: the
+                // channel is bounded, so a receiving Daemon that stops draining it blocks this
+                // write, and without a deadline the request would hang for as long as the client
+                // kept the body open.
+                using var chunkTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                chunkTimeout.CancelAfter(ChunkTimeout);
                 await channel.Writer.WriteAsync(
-                    read == UploadChunkBytes ? buffer : buffer[..read], cancellationToken);
+                    read == UploadChunkBytes ? buffer : buffer[..read], chunkTimeout.Token);
             }
 
             channel.Writer.TryComplete();

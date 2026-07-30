@@ -83,6 +83,32 @@ internal sealed class FileTransferRegistry
         }
     }
 
+    /// <summary>
+    /// Fails every transfer a machine was to send or receive, because its connection went away.
+    /// Without this the other side waits on bytes that will never arrive: an upload blocks on a
+    /// full channel nobody is draining, and a download would otherwise end in what looks like a
+    /// clean end of file — a truncated copy reported as a success.
+    /// </summary>
+    public void AbandonFor(Guid registrationId)
+    {
+        foreach (var (transferId, transfer) in this._transfers)
+        {
+            if (transfer.WriterRegistrationId == registrationId || transfer.ReaderRegistrationId == registrationId)
+            {
+                this.Abandon(transferId, "The machine disconnected during the transfer.");
+            }
+        }
+    }
+
+    private void Abandon(Guid transferId, string reason)
+    {
+        if (this._transfers.TryRemove(transferId, out var transfer))
+        {
+            transfer.Channel.Writer.TryComplete(new IOException(reason));
+            transfer.Completion.TrySetResult(reason);
+        }
+    }
+
     private bool TryGet(Guid transferId, Func<PendingTransfer, bool> isAllowed, out Channel<byte[]> channel)
     {
         channel = null!;

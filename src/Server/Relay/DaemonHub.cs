@@ -108,6 +108,9 @@ internal sealed class DaemonHub(IDaemonConnectionRegistry registry, FileTransfer
         if (registrationId is not null)
         {
             registry.Unregister(registrationId.Value.ToString(), this.Context.ConnectionId);
+
+            // Whatever this machine was sending or receiving is not going to finish.
+            transfers.AbandonFor(registrationId.Value);
             await this.TouchLastSeenAsync(registrationId.Value);
         }
 
