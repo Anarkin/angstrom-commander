@@ -63,3 +63,37 @@ az containerapp hostname bind --hostname api.<env>.angstrom.adamlengyel.com \
 
 (The Static Web App's `app.` certificate needs no such step — Azure issues it on its
 own once the custom domain validates.)
+
+## Pausing an environment
+
+The two billable resources can be stopped without losing anything — accounts,
+pairings, DNS, TLS and the deployed image all stay put, and a stopped stamp costs
+only PostgreSQL storage (~$4–5/month at 32 GiB):
+
+```sh
+# Pause: deactivate the Server's active revision (0 replicas), stop PostgreSQL
+az containerapp revision deactivate -g angstrom-commander-<env> -n ca-server-<env> \
+  --revision "$(az containerapp show -g angstrom-commander-<env> -n ca-server-<env> \
+                --query properties.latestRevisionName -o tsv)"
+az postgres flexible-server stop -g angstrom-commander-<env> -n angstrom-commander-<env>
+
+# Resume: the same two, with start / activate
+az postgres flexible-server start -g angstrom-commander-<env> -n angstrom-commander-<env>
+az containerapp revision activate -g angstrom-commander-<env> -n ca-server-<env> \
+  --revision "$(az containerapp show -g angstrom-commander-<env> -n ca-server-<env> \
+                --query properties.latestRevisionName -o tsv)"
+```
+
+(`az containerapp stop`/`start` would be simpler, but the installed CLI does not have
+them; revision deactivation is the same thing — zero replicas, zero compute billing.)
+Daemons reconnect on their own after a resume (their retry loop never gives up, by
+design).
+
+Two caveats:
+
+- **Azure auto-restarts a stopped PostgreSQL Flexible Server after 7 days** — its
+  compute quietly starts billing again unless re-stopped. The Container App stays
+  stopped indefinitely.
+- Stopping is for weeks, `azd down` is for months: tearing the stamp down costs
+  nothing at all, but loses the environment's data and needs the certificate bind
+  and pairing redone on the way back up.

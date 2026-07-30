@@ -110,6 +110,7 @@ Where the code actually is, as of July 2026 — a living list, so update it when
 - Server and Daemon containers run as a non-root user
 - WebClient: sign in / register, claim a pairing code, machine list with online status, dual-pane browser with download, upload and copy between panes (both asking before they replace a file)
 - Azure deployment: `infra/` is real — a shared Terraform module (imported the hand-made resource group and DNS zone, added the container registry) plus the per-environment stamp driven by `azd`. The `test` stamp is live: Server on Container Apps behind `api.test.angstrom.adamlengyel.com` (managed TLS), WebClient on Static Web Apps behind `app.test.…`, managed PostgreSQL whose schema self-initialized via migrations on first boot, CORS verified across the real origins, and `terraform fmt`/`validate` gating every PR
+- The whole product loop verified over the public internet (July 2026): a real Windows Daemon enrolled against the test stamp, was claimed from the deployed WebClient, reconnects on its own through Server pauses, and serves relayed directory listings of `C:\` paths
 
 **Next, in order:** remaining file operations (mkdir, rename, delete, move) → MCP endpoint with PATs → OAuth + consent → Agent + model picker.
 
@@ -122,7 +123,7 @@ Where the code actually is, as of July 2026 — a living list, so update it when
 - Downloads buffer into a browser Blob — fine for documents, wrong for very large files; the fix is a short-lived download ticket in the URL so the browser streams to disk
 - No live-update channel for clients: panes refresh on navigation, and there is no transfer progress
 - The WebClient bundle ships no Content-Security-Policy: it has to name the Server's origin, so it belongs with the Static Web Apps configuration rather than the compose-only nginx image
-- Windows path handling in the WebClient is unit-tested but has never met a Daemon running on Windows
+- Windows path handling is proven at the API level (a real Windows Daemon serves relayed `C:\` listings on the test stamp), but the WebClient's dual-pane browsing of Windows paths is still unit-tests-only
 - The Daemon's private key sits unprotected on disk (no DPAPI/keychain/file-permission hardening) — the sandbox refuses to serve it however the roots are configured, but local file permissions must still be addressed before any real install story
 - The path sandbox resolves links and then opens by path, so a link swapped in between the two would not be caught. Closing that needs opening by handle (`O_NOFOLLOW` and the Windows equivalent); it requires local write access to a shared folder to exploit, so it waits
 - `MapOpenApi()` is not wired, so the contract exists only as a build artifact; there is no browsable API reference
@@ -200,7 +201,7 @@ Two things drive the bill, and neither is the resource list:
 
 The test column's 12 h/day figure is an *assumption about usage, not something the stamp does by itself*: the standing test environment runs `minReplicas: 1` around the clock, so left alone it bills like the prod column (~$28 Server + ~$19 PostgreSQL ≈ $47/month) — the 12 h figure is what stopping it outside working hours would earn. The Terraform state storage account adds pennies (LRS, kilobytes of state).
 
-Levers: PostgreSQL on a standing free serverless tier (e.g. Neon, which scales to zero and is ample for this schema) takes prod to ~$34/month. Demo stamps cost almost nothing while no Daemon is paired to them — pair one and its reconnect loop keeps the environment awake, which removes the saving.
+Levers: a standing environment nobody is using right now can be *paused* — Server revision deactivated, PostgreSQL stopped (infra/README.md § Pausing an environment) — dropping it to ~$4–5/month of storage, with the caveat that Azure restarts a stopped PostgreSQL by itself after 7 days. PostgreSQL on a standing free serverless tier (e.g. Neon, which scales to zero and is ample for this schema) takes prod to ~$34/month. Demo stamps cost almost nothing while no Daemon is paired to them — pair one and its reconnect loop keeps the environment awake, which removes the saving.
 
 One discount is deliberately left out of the figures above: Container Apps includes 180,000 vCPU-seconds and 360,000 GiB-seconds per subscription per month, worth roughly $7.50 at these rates. It is consumed once across all environments rather than per environment, so the real invoice should come out about $7.50 below the sum of any columns here.
 
