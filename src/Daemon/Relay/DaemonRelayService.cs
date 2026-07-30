@@ -44,7 +44,7 @@ internal sealed partial class DaemonRelayService(
         await using var connection = new HubConnectionBuilder()
             .WithUrl(new Uri(relayOptions.ServerUrl, "/hub/daemon"), hubOptions =>
                 hubOptions.AccessTokenProvider = () => this.GetConnectionTokenAsync(registrationId))
-            .WithAutomaticReconnect()
+            .WithAutomaticReconnect(new AlwaysRetryPolicy())
             .Build();
 
         connection.On<ListDirectoryRequest, ListDirectoryResponse>(
