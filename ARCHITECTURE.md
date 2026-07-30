@@ -120,12 +120,13 @@ See the "Provisioning & deployment" diagram at the bottom for how the pieces fit
 
 > **Estimated July 2026, West Europe. Keep this current** — re-check it whenever the hosting choices, SKUs, or replica counts change, and refresh the rates periodically even when nothing changes: Azure prices drift, and a stale table here is more misleading than no table. Same living-document rule as the rest of this file. Only permanent free allowances are counted (never new-customer trials, which expire and would make the numbers lie later).
 
-Assumes Container Apps *active* billing rates, one enrolled Daemon, and light personal traffic. Each environment is priced on its own, at full rates — see the note after the table for the one discount left out.
+Rates come from Azure's retail prices API for West Europe (`prices.azure.com/api/retail/prices`), which is the way to re-check them: Container Apps Consumption at **$0.000034 per vCPU-second active** ($0.000004 idle) and **$0.000004 per GiB-second** (memory has no idle discount), requests at $0.56 per million after the first two million, PostgreSQL B1ms at $0.0199/hour plus $0.1369/GiB-month of storage. Assumes active billing, one enrolled Daemon, and light personal traffic. Each environment is priced on its own, at full rates — see the note after the table for the one discount left out.
 
 | Component | prod (always on) | test (12 h/day ≈ 365 h) | demo123 (3-day stamp, ~2 h used) |
 | --- | --- | --- | --- |
-| **Server** — Container Apps, 0.25 vCPU / 0.5 GiB | ~$20 (730 h) | ~$10 (365 h) | ~$0.05 (scales to zero) |
-| **PostgreSQL** | Flexible Server B1ms + 32 GiB: ~$16 | its own Flexible Server B1ms, always on: ~$16 (shared test data must survive restarts, so this cannot be containerized — see the note below) | containerized in the stamp, disposable: ~$2 |
+| **Server** — Container Apps, 0.25 vCPU / 0.5 GiB | ~$28 (730 h) | ~$14 (365 h) | ~$0.10 (scales to zero) |
+| **PostgreSQL** | Flexible Server B1ms + 32 GiB: ~$19 | its own Flexible Server B1ms, always on: ~$19 (shared test data must survive restarts, so this cannot be containerized — see the note below) | containerized in the stamp, disposable: ~$3 |
+| **HTTP requests** — first 2M/month free, then $0.56/M | $0 | $0 | $0 |
 | **WebClient** — Static Web Apps, free tier | $0 | $0 | $0 |
 | **Container Registry** — ACR Basic | ~$5 (shared by all stamps) | shared | shared |
 | **DNS zone** | ~$0.50 (shared) | shared | shared |
@@ -133,18 +134,20 @@ Assumes Container Apps *active* billing rates, one enrolled Daemon, and light pe
 | **Egress** — first 100 GB/month free, then ~$0.087/GB | $0 at light use | $0 | $0 |
 | **Agent / LLM tokens** — pay-per-token, per-user caps | $0 until the Agent ships | — | — |
 | **Redis** — only once the Server runs >1 replica | $0 today, ~$16 when needed | — | — |
-| **Total** | **~$42/month** | **~$26/month** | **~$2 for its whole life** |
+| **Total** | **~$53/month** | **~$33/month** | **~$3 for its whole life** |
 
 Which PostgreSQL an environment gets is a stamp variable, not a different stamp: **managed wherever data must survive** (prod, and any shared environment people rely on), **containerized only where the data is disposable** (per-branch demo stamps, local compose). There is no third option in this hosting model — a container's filesystem is ephemeral, and Container Apps' only volume type is Azure Files over SMB, which PostgreSQL does not support as a data directory (it requires `0700` on `PGDATA`, which SMB cannot express, and lacks dependable `fsync`). "Containerized" therefore always means "disposable".
 
 Two things drive the bill, and neither is the resource list:
 
-- **The Server cannot sleep.** Daemons hold sockets open, so `minReplicas: 1` is required and prod pays 24/7. That is the direct price of the "no NAT, no port forwarding" promise. Idle billing rates (8× cheaper on vCPU) would apply to a replica that is *not processing requests*, but a live WebSocket plausibly counts as one — so budget the active rate and treat idle as upside.
+- **The Server cannot sleep.** Daemons hold sockets open, so `minReplicas: 1` is required and prod pays 24/7. That is the direct price of the "no NAT, no port forwarding" promise. The idle rate is 8.5× cheaper on vCPU (memory costs the same either way) and applies to a replica that is *not processing requests*, but a live WebSocket plausibly counts as one — so budget the active rate and treat idle as upside (~$8/month instead of ~$28 if it ever applied).
 - **Egress scales with what users move.** Downloads and the outbound leg of a machine-to-machine copy leave Azure; inbound is free. 100 GB/month is free, so personal use is $0 — but 1 TB/month of relayed transfers is ~$78/month. That is the § Scaling P2P argument stated in currency.
 
-Levers: PostgreSQL on a standing free serverless tier (e.g. Neon, which scales to zero and is ample for this schema) takes prod to ~$26/month. Demo stamps cost almost nothing while no Daemon is paired to them — pair one and its reconnect loop keeps the environment awake, which removes the saving.
+Levers: PostgreSQL on a standing free serverless tier (e.g. Neon, which scales to zero and is ample for this schema) takes prod to ~$34/month. Demo stamps cost almost nothing while no Daemon is paired to them — pair one and its reconnect loop keeps the environment awake, which removes the saving.
 
-One discount is deliberately left out of the figures above: Container Apps includes 180,000 vCPU-seconds and 360,000 GiB-seconds per subscription per month, worth roughly $5. It is consumed once across all environments rather than per environment, so the real invoice should come out about $5 below the sum of any columns here.
+One discount is deliberately left out of the figures above: Container Apps includes 180,000 vCPU-seconds and 360,000 GiB-seconds per subscription per month, worth roughly $7.50 at these rates. It is consumed once across all environments rather than per environment, so the real invoice should come out about $7.50 below the sum of any columns here.
+
+**Scaling up is a cliff, not a ramp.** Everything above uses the serverless Consumption profile, where a replica costs what it allocates. The alternative — a Dedicated workload profile, which § Scaling names as the step before AKS — rents whole nodes continuously and adds a **$0.10/hour Dedicated plan management fee**: the smallest profile (D4, 4 vCPU / 16 GiB) is ~$236 compute + ~$78 memory + $73 management ≈ **$387/month**, roughly 14× the Server's current footprint. Growing by adding 0.25 vCPU Consumption replicas (~$28 each) stays cheaper for a long time. Note also that the management fee attaches to an environment using private endpoints or planned maintenance *even on Consumption*, so enabling either is a ~$73/month decision rather than a checkbox.
 
 ## Source control & CI/CD
 
