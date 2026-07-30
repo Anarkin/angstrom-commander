@@ -41,6 +41,11 @@ internal static class AuthEndpoints
                 var user = await users.FindByEmailAsync(request.Email);
                 if (user is null)
                 {
+                    // Hash anyway. Password hashing is the slow part of this endpoint, so
+                    // returning before doing it would make an address with no account answer
+                    // measurably faster than a wrong password — enumeration with a stopwatch,
+                    // which identical response bodies alone do not prevent.
+                    users.PasswordHasher.HashPassword(new AppUser(), request.Password);
                     return WrongCredentials();
                 }
 
