@@ -44,7 +44,17 @@ function stubApi(overrides: Record<string, unknown> = {}) {
         calls.push({ method: init?.method ?? "GET", url: url.pathname + url.search });
 
         const match = Object.entries(overrides).find(([key]) => (url.pathname + url.search).includes(key));
-        const body = match?.[1] ?? (url.pathname === "/api/daemons" ? [homeMachine, laptopMachine] : []);
+        const body =
+            match?.[1] ??
+            (url.pathname === "/api/daemons"
+                ? [homeMachine, laptopMachine]
+                : url.pathname.endsWith("/roots")
+                  ? // Every stubbed machine shares the compose demo's two roots.
+                    [
+                        { path: "/data", writable: false },
+                        { path: "/uploads", writable: true },
+                    ]
+                  : []);
         return Promise.resolve(
             new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }),
         );
@@ -117,7 +127,7 @@ test("shows a failed sign-in without entering the app", async () => {
     expect(screen.getByRole("heading", { name: /sign in/i })).toBeInTheDocument();
 });
 
-test("picking a machine lists its directory", async () => {
+test("picking a machine starts in its first shared root and lists it", async () => {
     localStorage.setItem("angstrom.accessToken", "token-abc");
     stubApi({ "/list": [notes, projects] });
     const user = userEvent.setup();
@@ -126,10 +136,30 @@ test("picking a machine lists its directory", async () => {
     await user.selectOptions(await screen.findByLabelText("Left: machine"), homeMachine.registrationId);
 
     expect(await screen.findByText(/notes\.txt/)).toBeInTheDocument();
+    // Nobody guesses paths: the machine's first shared root became the starting point.
+    expect(screen.getByLabelText("Left: path")).toHaveValue("/data");
     // Directories sort first, and only files offer a download.
     const firstEntryRow = screen.getAllByRole("row")[1]!;
     expect(firstEntryRow).toHaveTextContent("projects");
     expect(within(firstEntryRow).queryByRole("button", { name: /download/i })).toBeNull();
+});
+
+test("the shared-folders dropdown jumps between roots and marks read-only ones", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    const calls = stubApi({ "/list": [notes] });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(await screen.findByLabelText("Left: machine"), homeMachine.registrationId);
+    const rootPicker = await screen.findByLabelText("Left: shared folder");
+    expect(within(rootPicker).getByText("/data (read-only)")).toBeInTheDocument();
+
+    await user.selectOptions(rootPicker, "/uploads");
+
+    expect(screen.getByLabelText("Left: path")).toHaveValue("/uploads");
+    await waitFor(() => {
+        expect(calls.some((call) => call.url.includes("/list?path=%2Fuploads"))).toBe(true);
+    });
 });
 
 test("clicking a directory navigates into it", async () => {
@@ -166,7 +196,8 @@ test("copies the selected file to the other machine without downloading it", asy
     expect(copyCall?.method).toBe("POST");
     expect(copyCall?.url).toContain(`${homeMachine.registrationId}/copy-to/${laptopMachine.registrationId}`);
     expect(copyCall?.url).toContain("sourcePath=%2Fdata%2Fnotes.txt");
-    expect(copyCall?.url).toContain("targetPath=%2Fuploads%2Fnotes.txt");
+    // Both panes auto-navigate to the machine's first shared root, so that is the target too.
+    expect(copyCall?.url).toContain("targetPath=%2Fdata%2Fnotes.txt");
     expect(copyCall?.url).toContain("overwrite=true");
     // No download endpoint involved — the bytes never touch the browser.
     expect(calls.some((call) => call.url.includes("/download"))).toBe(false);

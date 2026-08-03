@@ -19,6 +19,7 @@ internal sealed partial class DaemonRelayService(
     IOptions<RelayOptions> options,
     DaemonIdentityStore identityStore,
     ServerApiClient serverApi,
+    ListRootsHandler listRootsHandler,
     ListDirectoryHandler listDirectoryHandler,
     DownloadFileHandler downloadFileHandler,
     UploadFileHandler uploadFileHandler,
@@ -77,6 +78,8 @@ internal sealed partial class DaemonRelayService(
             .Build();
 
         connection.On(DaemonHubMethods.Revoked, () => revoked.TrySetResult());
+
+        connection.On(DaemonHubMethods.ListRoots, () => listRootsHandler.Handle());
 
         connection.On<ListDirectoryRequest, ListDirectoryResponse>(
             DaemonHubMethods.ListDirectory,

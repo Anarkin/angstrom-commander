@@ -53,7 +53,7 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
         var token = await PostAsync<TokenResponse>(
             daemonClient, "/api/daemon-auth/token", new { registrationId = claim.RegistrationId, signature });
 
-        // Connect to the hub as the Daemon and serve a canned listing.
+        // Connect to the hub as the Daemon and serve a canned listing and roots.
         await using var daemonConnection = BuildDaemonConnection(factory, token.AccessToken);
         daemonConnection.On<ListDirectoryRequest, ListDirectoryResponse>(
             DaemonHubMethods.ListDirectory,
@@ -61,6 +61,9 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
             [
                 new DirectoryEntry("hello.txt", IsDirectory: false, SizeBytes: 42, ModifiedAt: DateTimeOffset.UnixEpoch),
             ]));
+        daemonConnection.On(
+            DaemonHubMethods.ListRoots,
+            static () => new ListRootsResponse([new SharedRoot("/data", Writable: false)]));
         await daemonConnection.StartAsync();
 
         // The user's machine list shows it online.
@@ -69,7 +72,14 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
         Assert.Equal("Test Machine", machine.DisplayName);
         Assert.True(machine.Online);
 
-        // And the relay lists through it, end to end.
+        // The machine tells its owner what it shares...
+        var roots = await GetAsync<List<SharedRoot>>(
+            userClient, new Uri($"/api/daemons/{claim.RegistrationId}/roots", UriKind.Relative));
+        var root = Assert.Single(roots);
+        Assert.Equal("/data", root.Path);
+        Assert.False(root.Writable);
+
+        // ...and the relay lists through it, end to end.
         var entries = await GetAsync<List<DirectoryEntry>>(
             userClient, new Uri($"/api/daemons/{claim.RegistrationId}/list?path=/data", UriKind.Relative));
         var entry = Assert.Single(entries);

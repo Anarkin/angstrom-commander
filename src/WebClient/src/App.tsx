@@ -9,13 +9,14 @@ import type { DirectoryEntry, Machine } from "./serverApi/types";
 import { joinPath } from "./formatting";
 import { useSession } from "./useSession";
 
-const emptyPane: PaneState = { registrationId: null, path: "/data" };
+// Paths start empty: picking a machine fills them with its first shared root.
+const emptyPane: PaneState = { registrationId: null, path: "" };
 
 function App() {
     const { signedIn, signIn, signOut, handleFailure } = useSession();
     const [machines, setMachines] = useState<Machine[]>([]);
     const [left, setLeft] = useState<PaneState>(emptyPane);
-    const [right, setRight] = useState<PaneState>({ registrationId: null, path: "/uploads" });
+    const [right, setRight] = useState<PaneState>(emptyPane);
     const [leftSelection, setLeftSelection] = useState<DirectoryEntry | null>(null);
     const [rightSelection, setRightSelection] = useState<DirectoryEntry | null>(null);
     const [leftEntries, setLeftEntries] = useState<DirectoryEntry[]>([]);

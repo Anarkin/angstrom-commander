@@ -12,6 +12,7 @@ builder.Services.AddSingleton(static sp =>
     var relay = sp.GetRequiredService<IOptions<RelayOptions>>().Value;
     return new PathSandbox(relay.AllowedRoots, neverShared: relay.StateDirectory);
 });
+builder.Services.AddSingleton<ListRootsHandler>();
 builder.Services.AddSingleton<ListDirectoryHandler>();
 builder.Services.AddSingleton<DownloadFileHandler>();
 builder.Services.AddSingleton<UploadFileHandler>();

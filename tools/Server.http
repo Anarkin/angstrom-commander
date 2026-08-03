@@ -53,7 +53,11 @@ Authorization: Bearer {{token}}
 ###
 @registrationId = {{machines.response.body.$[0].registrationId}}
 
-### 5. List a directory through the relay
+### 5. What the machine shares (the valid starting points for every path below)
+GET {{server}}/api/daemons/{{registrationId}}/roots
+Authorization: Bearer {{token}}
+
+### List a directory through the relay
 GET {{server}}/api/daemons/{{registrationId}}/list?path=/data
 Authorization: Bearer {{token}}
 

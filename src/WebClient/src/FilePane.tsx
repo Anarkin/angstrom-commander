@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { formatSize, formatTimestamp, joinPath, parentPath } from "./formatting";
-import { downloadFile, listDirectory, uploadFile } from "./serverApi/files";
-import type { DirectoryEntry, Machine } from "./serverApi/types";
+import { downloadFile, listDirectory, listRoots, uploadFile } from "./serverApi/files";
+import type { DirectoryEntry, Machine, SharedRoot } from "./serverApi/types";
 
 export interface PaneState {
     registrationId: string | null;
@@ -37,6 +37,7 @@ export function FilePane({
     onEntriesLoaded,
 }: FilePaneProps) {
     const [entries, setEntries] = useState<DirectoryEntry[] | null>(null);
+    const [roots, setRoots] = useState<SharedRoot[] | null>(null);
     const [message, setMessage] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const [localReload, setLocalReload] = useState(0);
@@ -44,10 +45,43 @@ export function FilePane({
 
     const { registrationId, path } = state;
 
+    // What the machine shares: fetched on machine pick, and the first root becomes the
+    // starting path — nobody should have to guess what a sandbox would accept.
+    useEffect(() => {
+        if (registrationId === null) {
+            return;
+        }
+
+        let active = true;
+        listRoots(registrationId)
+            .then((shared) => {
+                if (!active) {
+                    return;
+                }
+
+                setRoots(shared);
+                const first = shared[0];
+                if (first !== undefined) {
+                    onStateChange({ registrationId, path: first.path });
+                }
+            })
+            .catch((error: unknown) => {
+                if (active) {
+                    setMessage(onFailure(error));
+                }
+            });
+
+        return () => {
+            active = false;
+        };
+        // Only a machine change should re-ask; the path deliberately stays out of this list.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [registrationId, onFailure]);
+
     // State is only touched in the async continuations: an effect that sets state synchronously
     // costs an extra render pass (and the hooks lint rule rightly objects).
     useEffect(() => {
-        if (registrationId === null) {
+        if (registrationId === null || path === "") {
             return;
         }
 
@@ -153,8 +187,13 @@ export function FilePane({
                     onChange={(event) => {
                         onSelect(null);
                         setEntries(null);
+                        setRoots(null);
                         setMessage(null);
-                        onStateChange({ registrationId: event.target.value === "" ? null : event.target.value, path });
+                        // The path resets with the machine: the roots fetch fills it in.
+                        onStateChange({
+                            registrationId: event.target.value === "" ? null : event.target.value,
+                            path: "",
+                        });
                     }}
                 >
                     <option value="">Pick a machine…</option>
@@ -168,6 +207,25 @@ export function FilePane({
             </div>
 
             <div className="row">
+                <select
+                    value=""
+                    aria-label={`${title}: shared folder`}
+                    disabled={roots === null || roots.length === 0}
+                    onChange={(event) => {
+                        if (event.target.value !== "") {
+                            onSelect(null);
+                            onStateChange({ registrationId, path: event.target.value });
+                        }
+                    }}
+                >
+                    <option value="">Shared folders…</option>
+                    {(roots ?? []).map((root) => (
+                        <option key={root.path} value={root.path}>
+                            {root.path}
+                            {root.writable ? "" : " (read-only)"}
+                        </option>
+                    ))}
+                </select>
                 <button
                     type="button"
                     title="Up one level"
@@ -194,6 +252,10 @@ export function FilePane({
                     Go
                 </button>
             </div>
+
+            {registrationId !== null && roots !== null && roots.length === 0 && (
+                <p className="muted">This machine shares no folders; its Daemon has no allowed roots configured.</p>
+            )}
 
             {registrationId !== null && entries !== null && (
                 <table>

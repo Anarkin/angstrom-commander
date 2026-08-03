@@ -42,6 +42,12 @@ internal sealed class PathSandbox
             .ToList();
     }
 
+    /// <summary>
+    /// The resolved roots, for telling the machine's owner what is shared — the resolved
+    /// (not configured) form, because that is what listings and paths speak.
+    /// </summary>
+    public IReadOnlyList<AllowedRoot> Roots => this._allowedRoots;
+
     public bool TryResolveForRead(string requestedPath, out string resolvedPath)
     {
         return this.TryResolve(requestedPath, requireWritable: false, out resolvedPath);

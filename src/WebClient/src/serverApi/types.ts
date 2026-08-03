@@ -7,6 +7,7 @@ type Schemas = components["schemas"];
 
 export type Machine = Schemas["MachineResponse"];
 export type DirectoryEntry = Schemas["DirectoryEntry"];
+export type SharedRoot = Schemas["SharedRoot"];
 export type LoginResponse = Schemas["LoginResponse"];
 export type RegisterResponse = Schemas["RegisterResponse"];
 export type ClaimResponse = Schemas["ClaimResponse"];

@@ -1,8 +1,13 @@
 import { send, sendForJson } from "./http";
-import type { DirectoryEntry, Machine, Transfer, TransferUsage } from "./types";
+import type { DirectoryEntry, Machine, SharedRoot, Transfer, TransferUsage } from "./types";
 
 export async function listMachines(): Promise<Machine[]> {
     return await sendForJson<Machine[]>("/api/daemons");
+}
+
+/** The folders a machine shares — the pane's valid starting points. */
+export async function listRoots(registrationId: string): Promise<SharedRoot[]> {
+    return await sendForJson<SharedRoot[]>(`/api/daemons/${registrationId}/roots`);
 }
 
 /** How much of the daily relay allowance is spent; limit 0 means none is configured. */

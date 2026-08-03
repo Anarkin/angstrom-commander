@@ -106,6 +106,46 @@ internal static class RelayEndpoints
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireAuthorization(AuthPolicies.User);
 
+        // What the machine shares — the discoverability side of the Daemon's sandbox, so
+        // a pane can offer real starting points instead of an empty path box.
+        app.MapGet(
+            "/api/daemons/{registrationId:guid}/roots",
+            static async Task<Results<Ok<IReadOnlyList<SharedRoot>>, ProblemHttpResult>> (
+                Guid registrationId,
+                HttpContext http,
+                AppDbContext db,
+                IDaemonConnectionRegistry registry,
+                IHubContext<DaemonHub> hub,
+                CancellationToken cancellationToken) =>
+            {
+                if (!await OwnsMachineAsync(db, http, registrationId, cancellationToken))
+                {
+                    return NoSuchMachine();
+                }
+
+                if (!registry.TryGetConnection(registrationId.ToString(), out var connectionId))
+                {
+                    return MachineOffline();
+                }
+
+                ListRootsResponse response;
+                try
+                {
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    timeout.CancelAfter(OperationTimeout);
+                    response = await hub.Clients.Client(connectionId)
+                        .InvokeAsync<ListRootsResponse>(DaemonHubMethods.ListRoots, timeout.Token);
+                }
+                catch (Exception ex) when (ex is IOException or OperationCanceledException)
+                {
+                    return MachineSilent();
+                }
+
+                return TypedResults.Ok(response.Roots);
+            })
+            .ProducesRelayProblems()
+            .RequireAuthorization(AuthPolicies.User);
+
         app.MapGet(
             "/api/daemons/{registrationId:guid}/list",
             static async Task<Results<Ok<IReadOnlyList<DirectoryEntry>>, ProblemHttpResult>> (
