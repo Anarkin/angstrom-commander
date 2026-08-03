@@ -112,6 +112,7 @@ Where the code actually is, as of July 2026 — a living list, so update it when
 - Unpair — the opposite of enrollment: a machine can be revoked from the WebClient (soft revoke, `RevokedAt`); it vanishes from the machine list, relay ops and the challenge refuse it, and the Daemon reacts — by push when connected, by the challenge refusal otherwise — by discarding its registration and returning to the pairing screen, TV-style
 - Azure deployment: `infra/` is real — a shared Terraform module (imported the hand-made resource group and DNS zone, added the container registry) plus the per-environment stamp driven by `azd`. The `test` stamp is live: Server on Container Apps behind `api.test.angstrom.adamlengyel.com` (managed TLS), WebClient on Static Web Apps behind `app.test.…`, managed PostgreSQL whose schema self-initialized via migrations on first boot, CORS verified across the real origins, and `terraform fmt`/`validate` gating every PR
 - The whole product loop verified over the public internet (July 2026): a real Windows Daemon enrolled against the test stamp, was claimed from the deployed WebClient, reconnects on its own through Server pauses, and serves relayed directory listings of `C:\` paths
+- Merges to main deploy themselves: after the CI gates pass, a workflow provisions + deploys the test stamp under a federated (secretless) identity — what is live on test is main, as of its last green push
 
 **Next, in order:** remaining file operations (mkdir, rename, delete, move) → MCP endpoint with PATs → OAuth + consent → Agent + model picker.
 
@@ -119,7 +120,7 @@ Where the code actually is, as of July 2026 — a living list, so update it when
 
 - Registration is open to anyone who finds the URL (rate-limited, and the transfer quotas bound what an account can cost, but accounts are free to create). Before any public exposure: a registration switch or invite gate first (smallest, closes the whole class), then email verification and bot protection (e.g. Turnstile) as the open-registration trio. Obscurity is the only gate today
 
-- Provision and deploy run from a dev machine (`azd provision` / `azd deploy`); CI/CD deploys (`azd pipeline config`, OIDC) are not wired yet, and neither are per-PR demo stamps
+- Per-PR demo stamps are not wired yet (the pull-request federated credential already exists, so it is workflow work, not identity work). And the deploy pipeline knows only test: when prod exists, it must get an approval gate, never the same auto-deploy
 - Binding a stamp's `api.` managed TLS certificate is a one-time manual step after first provision (`az containerapp hostname bind`, see infra/README.md): the azurerm provider cannot create Container Apps managed certificates, so Terraform creates the unbound domain and thereafter ignores the binding
 - Sessions are stateless JWTs only: no sessions table, no refresh tokens, and no "active sessions" page (machine unpair exists; *session* revocation does not)
 - The Server is single-replica by design for now (`maxReplicas: 1` in the stamp). The full inventory of per-replica state that moves to Redis together when that changes: the Daemon socket registry (already behind `IDaemonConnectionRegistry`), per-user transfer slots, and per-user daily usage counters — plus the piece that is real engineering rather than a swap: request forwarding between replicas ("requests follow the socket", § Architecture). Deliberately staying per-replica even then: the bandwidth token bucket (one transfer's bytes flow through one replica, and a shared bucket would put a Redis round trip in the hottest loop)
@@ -226,7 +227,7 @@ One discount is deliberately left out of the figures above: Container Apps inclu
 ## Source control & CI/CD
 
 - GitHub hosts the repo: <https://github.com/Anarkin/angstrom-commander> (private, personal account — free tier is ample for solo, incl. 2,000 Actions minutes/month)
-- CI/CD: GitHub Actions; `azd pipeline config` bootstraps the workflow + OIDC federated identity to Azure (no cloud secrets stored in GitHub)
+- CI/CD: GitHub Actions. Deploys are wired (July 2026): merges to main run the CI gates, and on success the `azure-dev.yml` workflow deploys to the test stamp — `azd provision` (idempotent, so infra changes ride along) + `azd deploy`, authenticating via the `msi-angstrom-commander` federated identity that `azd pipeline config` created (OIDC — no cloud secrets stored in GitHub)
 - Every PR runs the full guardrail suite: build (warnings = errors), tests, `dotnet format`, ESLint/Prettier, contract-drift checks, and a compose smoke test that builds all three images and waits for the Daemon to reach the Server (`terraform fmt`/`validate` join it with `infra/`)
 - Later: PR-open spawns a demo env (`azd up` for `demo-prN`), PR-close tears it down
 

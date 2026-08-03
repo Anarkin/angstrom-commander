@@ -1,0 +1,64 @@
+name: Deploy to test
+
+# Deploys main to the test stamp, but only after the CI gates pass — a red main stays
+# on people's machines, it does not ship. workflow_run fires on CI completion for pushes
+# to main; the job guard filters to successful runs.
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+# Secretless: the workflow's own GitHub-issued OIDC token is exchanged for Azure access
+# via the msi-angstrom-commander federated identity (created by `azd pipeline config`).
+# No cloud credential is stored in this repository.
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-test
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+      AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
+      # Terraform (run by azd provision) authenticates with the same federated identity.
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_USE_OIDC: "true"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: Azure/setup-azd@v2
+
+      # azd shells out to terraform; the wrapper's output capture confuses it.
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Log in with Azure (federated credentials)
+        run: |
+          azd auth login \
+            --client-id "$AZURE_CLIENT_ID" \
+            --federated-credential-provider "github" \
+            --tenant-id "$AZURE_TENANT_ID"
+
+      - name: Provision infrastructure
+        run: azd provision --no-prompt
+
+      - name: Deploy services
+        run: azd deploy --no-prompt
