@@ -103,7 +103,7 @@ Where the code actually is, as of July 2026 — a living list, so update it when
 - The relay: each Daemon holds one outbound SignalR connection and reconnects indefinitely; the Server routes requests down it. Socket lookup already sits behind `IDaemonConnectionRegistry`
 - Accounts (ASP.NET Core Identity, JWT), TV-style enrollment (pairing code → user claims it → registration, claimed atomically), and Daemon connection tokens earned by signing a server challenge with the machine's private key
 - Sign-in defences: account lockout, per-caller rate limits on every anonymous endpoint, no enumerable difference between a wrong password and an unknown account, and no signing key with a default
-- File operations: list, streamed download, streamed upload, and machine-to-machine copy — all chunked through one bounded channel, never buffered whole, with per-chunk deadlines on both directions and per-user ceilings on concurrent transfers, relayed bytes per day (10 GiB default — every relayed byte is an egress byte, so this bounds what one account can cost), and bandwidth (100 Mbit/s default); both configurable per environment, crossing them answers 429
+- File operations: list, streamed download, streamed upload, and machine-to-machine copy — all chunked through one bounded channel, never buffered whole, with per-chunk deadlines on both directions and per-user ceilings on concurrent transfers, relayed bytes per day (10 GiB default — every relayed byte is an egress byte, so this bounds what one account can cost), and bandwidth (100 Mbit/s default); both configurable per environment, crossing them answers 429. The WebClient shows the day's allowance as a progress bar in Settings (`GET /api/transfers/usage`), noting that only relayed transfers count
 - Path sandbox with per-root read-only/writable flags, symlink and junction resolution, and the Daemon's own state kept unreachable
 - Request bodies validated against the contract's own field limits, so bad input is a 400 rather than a database error
 - The API contract is generated (C# → `openapi/AngstromCommander.Server.json` → the WebClient's `schema.d.ts`), with CI failing on drift
@@ -116,6 +116,8 @@ Where the code actually is, as of July 2026 — a living list, so update it when
 **Next, in order:** remaining file operations (mkdir, rename, delete, move) → MCP endpoint with PATs → OAuth + consent → Agent + model picker.
 
 **Known gaps, all deliberate:**
+
+- Registration is open to anyone who finds the URL (rate-limited, and the transfer quotas bound what an account can cost, but accounts are free to create). Before any public exposure: a registration switch or invite gate first (smallest, closes the whole class), then email verification and bot protection (e.g. Turnstile) as the open-registration trio. Obscurity is the only gate today
 
 - Provision and deploy run from a dev machine (`azd provision` / `azd deploy`); CI/CD deploys (`azd pipeline config`, OIDC) are not wired yet, and neither are per-PR demo stamps
 - Binding a stamp's `api.` managed TLS certificate is a one-time manual step after first provision (`az containerapp hostname bind`, see infra/README.md): the azurerm provider cannot create Container Apps managed certificates, so Terraform creates the unbound domain and thereafter ignores the binding
