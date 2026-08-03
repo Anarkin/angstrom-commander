@@ -138,6 +138,16 @@ The model the system is built toward, which includes parts not written yet (MCP 
 - TLS everywhere; WebClient and MobileClient authenticate with JWT access tokens, and will carry hashed refresh tokens revocable per device once sessions are stored
 - Sign-in is guessing-resistant: failed attempts lock the account (ASP.NET Core Identity's counters), wrong password and unknown account answer identically so the endpoint cannot be used to enumerate emails, and every anonymous endpoint — sign-in, registration, enrollment, the Daemon challenge/token exchange — is rate limited per caller
 - No secret has a default: the JWT signing key ships nowhere in the repo (Development reads one from `appsettings.Development.json`, every other environment sets `Auth__JwtSigningKey`), and a Server configured without one refuses to issue or accept a token instead of falling back to something known
+- The two live token types side by side (both HS256 with the stamp's key, verified by one middleware — after the signature check, the `token_type` claim is the only wall between their worlds, enforced by two authorization policies and pinned by a test):
+
+  | | User token | Daemon token |
+  | --- | --- | --- |
+  | Earned by | password (+ lockout, rate limit) | signing a fresh nonce |
+  | Lifetime | 8 hours | 10 minutes |
+  | Claims | `sub` = user id, `token_type=user` | `registrationId`, `token_type=daemon` |
+  | Carried in | `Authorization: Bearer` header | query string on the SignalR connect |
+  | Opens | user endpoints (machines, files, unpair) | only the relay hub |
+  | Revocation today | expiry only (refresh tokens planned) | ≤10 min via `RevokedAt` at the challenge |
 - Daemon identity = keypair generated at enrollment; the Server stores only the public key (DB leak ≠ Daemon impersonation); revoking a registration kills that machine's access. The sandbox refuses to serve the Daemon's own state directory whatever the roots say, so sharing a folder that contains it cannot hand out the key that is the machine's identity
 - Enrollment: Daemon shows a short-lived one-time pairing code, user enters it in a logged-in WebClient or MobileClient (TV-pairing style)
 - Path sandboxing in the Daemon: canonicalize all client-supplied paths and resolve every symbolic link and junction along them, then enforce allowed roots — canonicalizing alone is lexical, so a link planted inside a shared folder would otherwise read and write outside it. Each root carries a writable flag and read-only is the default, so sharing a folder never implies permission to change it — writes resolve only against writable roots
@@ -312,6 +322,26 @@ sequenceDiagram
   Note over A,S: The Daemon asks, because nothing can connect to it yet.<br/>Future connects authenticate by signing a challenge with the private key.
 ```
 
+### User sign-in — password to bearer token
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant W as WebClient / MobileClient
+  participant S as Server
+  participant I as ASP.NET Identity
+  W->>S: POST /api/auth/login with email and password
+  S->>I: Find the account
+  Note over S,I: An unknown address still pays the hash cost - no timing side channel
+  I->>I: Check password with lockoutOnFailure (5 tries, then 5 minutes out)
+  I-->>S: Succeeded
+  S-->>W: JWT - sub is the user id, token_type user, exp now + 8 h, HS256 with the stamp's signing key
+  W->>S: Every later call with Authorization Bearer token
+  S->>S: Middleware verifies signature, issuer, audience, expiry - no DB lookup, any replica
+  S->>S: Policy User requires claim token_type user
+  S-->>W: 200
+```
+
 ### Daemon connection auth — proving the keypair, every connect
 
 ```mermaid
@@ -320,14 +350,14 @@ sequenceDiagram
   participant A as Daemon
   participant S as Server
   A->>S: POST /api/daemon-auth/challenge with registrationId
-  S->>S: Registration exists and not revoked?
-  S-->>A: Fresh random nonce (2 minute lifetime)
-  A->>A: Sign the nonce with the private key that never left this machine
+  S->>S: Registration exists and RevokedAt is null?
+  S-->>A: Fresh 32-byte nonce (2 minute lifetime, single use)
+  A->>A: Sign the nonce - ECDSA P-256 over SHA-256, private key never left this machine
   A->>S: POST /api/daemon-auth/token with the signature
-  S->>S: Verify against the STORED PUBLIC key
-  S-->>A: Short-lived connection JWT (claims say daemon, not user)
+  S->>S: Consume the nonce (replay impossible), verify against the STORED PUBLIC key
+  S-->>A: Connection JWT - registrationId claim, token_type daemon, exp now + 10 min
   A->>S: Open the SignalR socket bearing that token
-  Note over A,S: A leaked DB exposes only public keys - nobody can sign the next nonce.<br/>Short-lived tokens re-earned per connect are why revocation bites despite stateless JWTs.
+  Note over A,S: A leaked DB exposes only public keys - nobody can sign the next nonce.<br/>Tokens re-earned per connect are why revocation bites within minutes despite stateless JWTs.
 ```
 
 ### MCP authorization — OAuth 2.1 consent flow (planned, per § Architecture)
