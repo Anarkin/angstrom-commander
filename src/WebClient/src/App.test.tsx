@@ -80,12 +80,20 @@ test("signing in reveals the machines and the two panes", async () => {
     await user.type(screen.getByLabelText(/password/i), "Sup3rSecret!");
     await user.click(screen.getByRole("button", { name: /^sign in$/i }));
 
+    expect(await screen.findByLabelText("Left: machine")).toBeInTheDocument();
+    expect(screen.getByLabelText("Right: machine")).toBeInTheDocument();
+
+    // The machines list lives in Settings, not on the main screen.
+    expect(screen.queryByRole("heading", { name: /my machines/i })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /settings/i }));
     // Scoped to the machines list: the name also appears in both panes' machine pickers.
     const machineList = await screen.findByRole("list");
     expect(within(machineList).getByText("Home PC")).toBeInTheDocument();
     expect(within(machineList).getByText("Laptop")).toBeInTheDocument();
+
+    // Back returns to the panes with their state intact.
+    await user.click(screen.getByRole("button", { name: /back/i }));
     expect(screen.getByLabelText("Left: machine")).toBeInTheDocument();
-    expect(screen.getByLabelText("Right: machine")).toBeInTheDocument();
 });
 
 test("shows a failed sign-in without entering the app", async () => {
@@ -180,6 +188,38 @@ test("a copy that would replace a file is not sent when the user declines", asyn
     expect(calls.some((call) => call.url.includes("/copy-to/"))).toBe(false);
 });
 
+test("unpairing a machine asks first, then deletes and refreshes the list", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    const calls = stubApi();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /settings/i }));
+    // The first Unpair button belongs to the first machine in the list.
+    await user.click((await screen.findAllByRole("button", { name: /unpair/i }))[0]!);
+
+    expect(await screen.findByText(/unpaired home pc/i)).toBeInTheDocument();
+    expect(confirm).toHaveBeenCalled();
+    const deleteCall = calls.find((call) => call.method === "DELETE");
+    expect(deleteCall?.url).toBe(`/api/daemons/${homeMachine.registrationId}`);
+    // The list refreshes so the machine disappears.
+    expect(calls.filter((call) => call.method === "GET" && call.url === "/api/daemons").length).toBeGreaterThan(1);
+});
+
+test("declining the unpair confirmation sends nothing", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    const calls = stubApi();
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /settings/i }));
+    await user.click((await screen.findAllByRole("button", { name: /unpair/i }))[0]!);
+
+    expect(calls.some((call) => call.method === "DELETE")).toBe(false);
+});
+
 test("copy stays disabled until a file is selected on both machines", async () => {
     localStorage.setItem("angstrom.accessToken", "token-abc");
     stubApi({ "/list": [notes] });
@@ -235,6 +275,7 @@ test("pairing a machine posts the code and refreshes the list", async () => {
     const user = userEvent.setup();
     render(<App />);
 
+    await user.click(await screen.findByRole("button", { name: /settings/i }));
     await user.click(await screen.findByText(/pair a machine/i));
     await user.type(screen.getByPlaceholderText(/pairing code/i), "abcd2345");
     await user.type(screen.getByPlaceholderText(/name this machine/i), "Home PC");

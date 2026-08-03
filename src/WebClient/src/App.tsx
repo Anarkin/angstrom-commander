@@ -23,6 +23,7 @@ function App() {
     const [rightReload, setRightReload] = useState(0);
     const [transferMessage, setTransferMessage] = useState<string | null>(null);
     const [copying, setCopying] = useState(false);
+    const [view, setView] = useState<"commander" | "settings">("commander");
 
     const refreshMachines = useCallback(() => {
         listMachines()
@@ -94,14 +95,21 @@ function App() {
         <main className="wide">
             <div className="row spread">
                 <h1>Angstrom Commander</h1>
-                <button type="button" onClick={signOut}>
-                    Sign out
-                </button>
+                <div className="row">
+                    <button type="button" onClick={() => setView(view === "settings" ? "commander" : "settings")}>
+                        {view === "settings" ? "Back" : "Settings"}
+                    </button>
+                    <button type="button" onClick={signOut}>
+                        Sign out
+                    </button>
+                </div>
             </div>
 
-            <MachinesPanel machines={machines} onRefresh={refreshMachines} onFailure={handleFailure} />
+            {view === "settings" && (
+                <MachinesPanel machines={machines} onRefresh={refreshMachines} onFailure={handleFailure} />
+            )}
 
-            <div className="panes">
+            <div className="panes" hidden={view !== "commander"}>
                 <FilePane
                     title="Left"
                     machines={machines}
@@ -128,7 +136,7 @@ function App() {
                 />
             </div>
 
-            <div className="row center">
+            <div className="row center" hidden={view !== "commander"}>
                 <button type="button" disabled={!canCopyRight || copying} onClick={() => copy("left-to-right")}>
                     Copy →
                 </button>
@@ -137,7 +145,7 @@ function App() {
                 </button>
             </div>
 
-            {transferMessage !== null && <p className="notice center">{transferMessage}</p>}
+            {transferMessage !== null && view === "commander" && <p className="notice center">{transferMessage}</p>}
         </main>
     );
 }
