@@ -91,8 +91,8 @@ test("signing in reveals the machines and the two panes", async () => {
     expect(within(machineList).getByText("Home PC")).toBeInTheDocument();
     expect(within(machineList).getByText("Laptop")).toBeInTheDocument();
 
-    // Back returns to the panes with their state intact.
-    await user.click(screen.getByRole("button", { name: /back/i }));
+    // Hiding settings returns to the panes with their state intact.
+    await user.click(screen.getByRole("button", { name: /hide settings/i }));
     expect(screen.getByLabelText("Left: machine")).toBeInTheDocument();
 });
 

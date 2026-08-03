@@ -98,7 +98,7 @@ function App() {
                 <h1>Angstrom Commander</h1>
                 <div className="row">
                     <button type="button" onClick={() => setView(view === "settings" ? "commander" : "settings")}>
-                        {view === "settings" ? "Back" : "Settings"}
+                        {view === "settings" ? "Hide settings" : "Settings"}
                     </button>
                     <button type="button" onClick={signOut}>
                         Sign out
