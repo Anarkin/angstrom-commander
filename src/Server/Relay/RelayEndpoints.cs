@@ -165,11 +165,16 @@ internal static class RelayEndpoints
                     return MachineOffline();
                 }
 
-                if (transfers.TryCreate(
-                        GetUserId(http), writerRegistrationId: registrationId, readerRegistrationId: null)
-                    is not Guid transferId)
+                switch (transfers.TryCreate(
+                    GetUserId(http), writerRegistrationId: registrationId, readerRegistrationId: null,
+                    out var transferId))
                 {
-                    return TooManyTransfers();
+                    case CreateTransferResult.TooManyConcurrent:
+                        return TooManyTransfers();
+                    case CreateTransferResult.QuotaExhausted:
+                        return QuotaExhausted();
+                    default:
+                        break;
                 }
 
                 DownloadFileResponse response;
@@ -245,11 +250,16 @@ internal static class RelayEndpoints
                     return MachineOffline();
                 }
 
-                if (transfers.TryCreate(
-                        GetUserId(http), writerRegistrationId: null, readerRegistrationId: registrationId)
-                    is not Guid transferId)
+                switch (transfers.TryCreate(
+                    GetUserId(http), writerRegistrationId: null, readerRegistrationId: registrationId,
+                    out var transferId))
                 {
-                    return TooManyTransfers();
+                    case CreateTransferResult.TooManyConcurrent:
+                        return TooManyTransfers();
+                    case CreateTransferResult.QuotaExhausted:
+                        return QuotaExhausted();
+                    default:
+                        break;
                 }
 
                 try
@@ -274,7 +284,8 @@ internal static class RelayEndpoints
                     }
 
                     transfers.TryGetChannel(transferId, out var channel);
-                    var bytesTransferred = await PumpRequestBodyAsync(http.Request.Body, channel, cancellationToken);
+                    var bytesTransferred = await PumpRequestBodyAsync(
+                        http.Request.Body, channel, transfers, transferId, cancellationToken);
 
                     // The receiver reports when the bytes are actually on disk.
                     var failure = await transfers.Completion(transferId).WaitAsync(ChunkTimeout, cancellationToken);
@@ -285,6 +296,12 @@ internal static class RelayEndpoints
                     }
 
                     return TypedResults.Ok(new TransferResponse(bytesTransferred));
+                }
+                catch (TransferQuotaExceededException ex)
+                {
+                    // Before the machine-fault catch below: the machine did nothing wrong,
+                    // the caller's daily allowance ran out mid-upload.
+                    return TypedResults.Problem(detail: ex.Message, statusCode: StatusCodes.Status429TooManyRequests);
                 }
                 catch (Exception ex) when (ex is IOException or OperationCanceledException or TimeoutException)
                 {
@@ -328,13 +345,18 @@ internal static class RelayEndpoints
                     return MachineOffline();
                 }
 
-                if (transfers.TryCreate(
-                        GetUserId(http),
-                        writerRegistrationId: sourceRegistrationId,
-                        readerRegistrationId: targetRegistrationId)
-                    is not Guid transferId)
+                switch (transfers.TryCreate(
+                    GetUserId(http),
+                    writerRegistrationId: sourceRegistrationId,
+                    readerRegistrationId: targetRegistrationId,
+                    out var transferId))
                 {
-                    return TooManyTransfers();
+                    case CreateTransferResult.TooManyConcurrent:
+                        return TooManyTransfers();
+                    case CreateTransferResult.QuotaExhausted:
+                        return QuotaExhausted();
+                    default:
+                        break;
                 }
 
                 try
@@ -392,6 +414,8 @@ internal static class RelayEndpoints
     private static async Task<long> PumpRequestBodyAsync(
         Stream body,
         System.Threading.Channels.Channel<byte[]> channel,
+        FileTransferRegistry transfers,
+        Guid transferId,
         CancellationToken cancellationToken)
     {
         var total = 0L;
@@ -408,6 +432,10 @@ internal static class RelayEndpoints
                 }
 
                 total += read;
+
+                // Quota + bandwidth for the upload direction; the hub's incoming stream
+                // is the same gate for the other two transfer shapes.
+                await transfers.MeterAsync(transferId, read, cancellationToken);
 
                 // Rolling per-chunk timeout, the mirror of the one on the download side: the
                 // channel is bounded, so a receiving Daemon that stops draining it blocks this
@@ -436,6 +464,7 @@ internal static class RelayEndpoints
         return builder
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status429TooManyRequests)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable)
             .ProducesProblem(StatusCodes.Status504GatewayTimeout);
     }
@@ -499,6 +528,13 @@ internal static class RelayEndpoints
         return TypedResults.Problem(
             detail: "Too many transfers are already in progress. Wait for one to finish.",
             statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    private static ProblemHttpResult QuotaExhausted()
+    {
+        return TypedResults.Problem(
+            detail: TransferQuotaExceededException.UserFacingMessage,
+            statusCode: StatusCodes.Status429TooManyRequests);
     }
 
     private static ProblemHttpResult MachineSilent()

@@ -508,6 +508,48 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task UploadsStopWithTooManyRequestsWhenTheDailyQuotaIsSpent()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString) { DailyBytesPerUser = 100_000 };
+        using var userClient = factory.CreateClient();
+        var userToken = await RegisterAndLoginAsync(userClient, "quota@example.com");
+        userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+
+        var (registrationId, connection) = await ConnectDaemonAsync(factory, userClient, conn =>
+            conn.On<UploadFileRequest, UploadFileResponse>(
+                DaemonHubMethods.UploadFile,
+                request =>
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        await foreach (var _ in conn.StreamAsync<byte[]>(
+                            ServerHubMethods.DownloadFileChunks, request.TransferId))
+                        {
+                            // Drain and discard; the quota fails the transfer server-side.
+                        }
+                    });
+                    return UploadFileResponse.ForSuccess();
+                }));
+
+        await using (connection)
+        {
+            // Three times the quota: the upload dies mid-body with the quota's own message.
+            using var content = new ByteArrayContent(new byte[300_000]);
+            using var response = await userClient.PostAsync(
+                new Uri($"/api/daemons/{registrationId}/upload?path=/uploads/big.bin", UriKind.Relative), content);
+            Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+            Assert.Contains("Daily transfer limit", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+
+            // And with the allowance spent, the next transfer is refused before any byte moves.
+            using var secondContent = new ByteArrayContent([1]);
+            using var second = await userClient.PostAsync(
+                new Uri($"/api/daemons/{registrationId}/upload?path=/uploads/small.bin", UriKind.Relative),
+                secondContent);
+            Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
+        }
+    }
+
+    [Fact]
     public async Task UploadSurfacesRefusalFromTheMachine()
     {
         using var factory = new ServerFactory(postgres.ConnectionString);

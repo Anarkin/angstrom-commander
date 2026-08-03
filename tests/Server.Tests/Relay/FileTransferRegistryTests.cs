@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using AngstromCommander.Server.Relay;
+using Microsoft.Extensions.Options;
 
 namespace AngstromCommander.Server.Tests.Relay;
 
@@ -11,7 +13,7 @@ public class FileTransferRegistryTests
     [Fact]
     public void OnlyTheMachineAskedToSendMayWrite()
     {
-        var registry = new FileTransferRegistry();
+        var registry = CreateRegistry();
         var transferId = Create(registry, writerRegistrationId: Sender, readerRegistrationId: Receiver);
 
         Assert.True(registry.TryGetForWriter(transferId, Sender, out _));
@@ -22,7 +24,7 @@ public class FileTransferRegistryTests
     [Fact]
     public void OnlyTheMachineAskedToReceiveMayRead()
     {
-        var registry = new FileTransferRegistry();
+        var registry = CreateRegistry();
         var transferId = Create(registry, writerRegistrationId: Sender, readerRegistrationId: Receiver);
 
         Assert.True(registry.TryGetForReader(transferId, Receiver, out _));
@@ -33,7 +35,7 @@ public class FileTransferRegistryTests
     [Fact]
     public void OnlyTheReceiverMayReportCompletion()
     {
-        var registry = new FileTransferRegistry();
+        var registry = CreateRegistry();
         var transferId = Create(registry, writerRegistrationId: Sender, readerRegistrationId: Receiver);
 
         Assert.False(registry.TryComplete(transferId, Stranger, error: null));
@@ -43,7 +45,7 @@ public class FileTransferRegistryTests
     [Fact]
     public void AnUnknownTransferIsNobodys()
     {
-        var registry = new FileTransferRegistry();
+        var registry = CreateRegistry();
 
         Assert.False(registry.TryGetForWriter(Guid.NewGuid(), Sender, out _));
         Assert.False(registry.TryGetForReader(Guid.NewGuid(), Receiver, out _));
@@ -53,7 +55,7 @@ public class FileTransferRegistryTests
     [Fact]
     public async Task ADisconnectingReceiverReleasesTheWaitingSender()
     {
-        var registry = new FileTransferRegistry();
+        var registry = CreateRegistry();
         var transferId = Create(registry, writerRegistrationId: null, readerRegistrationId: Receiver);
         var completion = registry.Completion(transferId);
 
@@ -65,7 +67,7 @@ public class FileTransferRegistryTests
     [Fact]
     public async Task ADisconnectingSenderFailsTheStreamRatherThanEndingIt()
     {
-        var registry = new FileTransferRegistry();
+        var registry = CreateRegistry();
         var transferId = Create(registry, writerRegistrationId: Sender, readerRegistrationId: null);
         Assert.True(registry.TryGetChannel(transferId, out var channel));
 
@@ -85,7 +87,7 @@ public class FileTransferRegistryTests
     [Fact]
     public void AbandoningLeavesOtherMachinesTransfersAlone()
     {
-        var registry = new FileTransferRegistry();
+        var registry = CreateRegistry();
         var mine = Create(registry, writerRegistrationId: Sender, readerRegistrationId: Receiver);
         var theirs = Create(registry, writerRegistrationId: Stranger, readerRegistrationId: null);
 
@@ -99,39 +101,154 @@ public class FileTransferRegistryTests
     public void OneUserCannotOpenTransfersWithoutEnd()
     {
         // Every live transfer holds a buffer, on a Server shared with everyone else's machines.
-        var registry = new FileTransferRegistry();
+        var registry = CreateRegistry();
         var greedy = Guid.NewGuid();
 
         var opened = Enumerable.Range(0, 64)
-            .Select(_ => registry.TryCreate(greedy, writerRegistrationId: Sender, readerRegistrationId: null))
+            .Select(attempt =>
+                registry.TryCreate(greedy, writerRegistrationId: Sender, readerRegistrationId: null, out _))
             .ToList();
 
-        Assert.Contains(opened, static transferId => transferId is null);
+        Assert.Contains(CreateTransferResult.TooManyConcurrent, opened);
 
         // And one user filling up says nothing about anybody else.
-        Assert.NotNull(registry.TryCreate(Guid.NewGuid(), writerRegistrationId: Sender, readerRegistrationId: null));
+        Assert.Equal(
+            CreateTransferResult.Created,
+            registry.TryCreate(Guid.NewGuid(), writerRegistrationId: Sender, readerRegistrationId: null, out _));
     }
 
     [Fact]
     public void FinishedTransfersFreeTheirPlaceInTheAllowance()
     {
-        var registry = new FileTransferRegistry();
+        var registry = CreateRegistry();
         var user = Guid.NewGuid();
         var opened = new List<Guid>();
-        while (registry.TryCreate(user, writerRegistrationId: Sender, readerRegistrationId: null) is Guid transferId)
+        while (registry.TryCreate(user, writerRegistrationId: Sender, readerRegistrationId: null, out var transferId)
+            == CreateTransferResult.Created)
         {
             opened.Add(transferId);
         }
 
         registry.Remove(opened[0]);
 
-        Assert.NotNull(registry.TryCreate(user, writerRegistrationId: Sender, readerRegistrationId: null));
+        Assert.Equal(
+            CreateTransferResult.Created,
+            registry.TryCreate(user, writerRegistrationId: Sender, readerRegistrationId: null, out _));
+    }
+
+    [Fact]
+    public async Task CrossingTheDailyQuotaFailsTheTransferAndBlocksNewOnes()
+    {
+        var registry = CreateRegistry(dailyBytesPerUser: 100);
+        var user = Guid.NewGuid();
+        Assert.Equal(
+            CreateTransferResult.Created,
+            registry.TryCreate(user, writerRegistrationId: Sender, readerRegistrationId: null, out var transferId));
+
+        // Within the allowance: fine. The byte that crosses it: the transfer dies with the
+        // quota's own message, so the failure explains itself. (The completion task is taken
+        // up front, the way the copy endpoint holds it while bytes flow.)
+        var completion = registry.Completion(transferId);
+        await registry.MeterAsync(transferId, 100, CancellationToken.None);
+        await Assert.ThrowsAsync<TransferQuotaExceededException>(
+            () => registry.MeterAsync(transferId, 1, CancellationToken.None));
+        Assert.False(registry.TryGetChannel(transferId, out _));
+        Assert.Equal(
+            TransferQuotaExceededException.UserFacingMessage,
+            await completion.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        // And no new transfer starts while the allowance is spent — but only for that user.
+        Assert.Equal(
+            CreateTransferResult.QuotaExhausted,
+            registry.TryCreate(user, writerRegistrationId: Sender, readerRegistrationId: null, out _));
+        Assert.Equal(
+            CreateTransferResult.Created,
+            registry.TryCreate(Guid.NewGuid(), writerRegistrationId: Sender, readerRegistrationId: null, out _));
+    }
+
+    [Fact]
+    public async Task TheQuotaResetsAtMidnightUtc()
+    {
+        var clock = new SettableClock(new DateTimeOffset(2026, 8, 3, 23, 0, 0, TimeSpan.Zero));
+        var registry = CreateRegistry(dailyBytesPerUser: 100, clock: clock);
+        var user = Guid.NewGuid();
+        registry.TryCreate(user, writerRegistrationId: Sender, readerRegistrationId: null, out var transferId);
+        await registry.MeterAsync(transferId, 100, CancellationToken.None);
+        Assert.Equal(
+            CreateTransferResult.QuotaExhausted,
+            registry.TryCreate(user, writerRegistrationId: Sender, readerRegistrationId: null, out _));
+
+        clock.UtcNow = new DateTimeOffset(2026, 8, 4, 0, 0, 1, TimeSpan.Zero);
+
+        Assert.Equal(
+            CreateTransferResult.Created,
+            registry.TryCreate(user, writerRegistrationId: Sender, readerRegistrationId: null, out var fresh));
+        await registry.MeterAsync(fresh, 100, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task TheBandwidthCapSlowsAnOverdrawnSender()
+    {
+        // 100 KB/s, and the burst allowance is one second's worth — so pushing 150 KB overdraws
+        // by 50 KB and the second call must sleep about half a second paying it off.
+        var registry = CreateRegistry(bytesPerSecondPerUser: 100_000);
+        registry.TryCreate(
+            Guid.NewGuid(), writerRegistrationId: Sender, readerRegistrationId: null, out var transferId);
+
+        var stopwatch = Stopwatch.StartNew();
+        await registry.MeterAsync(transferId, 150_000, CancellationToken.None);
+        await registry.MeterAsync(transferId, 1, CancellationToken.None);
+        stopwatch.Stop();
+
+        Assert.True(
+            stopwatch.Elapsed >= TimeSpan.FromMilliseconds(400),
+            $"Expected the overdraft to cost ~500ms; it cost {stopwatch.Elapsed.TotalMilliseconds}ms.");
+    }
+
+    [Fact]
+    public async Task DisabledLimitsMeterNothing()
+    {
+        var registry = CreateRegistry(dailyBytesPerUser: 0, bytesPerSecondPerUser: 0);
+        var user = Guid.NewGuid();
+        registry.TryCreate(user, writerRegistrationId: Sender, readerRegistrationId: null, out var transferId);
+
+        var stopwatch = Stopwatch.StartNew();
+        await registry.MeterAsync(transferId, int.MaxValue, CancellationToken.None);
+        await registry.MeterAsync(transferId, int.MaxValue, CancellationToken.None);
+        stopwatch.Stop();
+
+        Assert.True(registry.TryGetChannel(transferId, out _));
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1));
     }
 
     private static Guid Create(FileTransferRegistry registry, Guid? writerRegistrationId, Guid? readerRegistrationId)
     {
-        var transferId = registry.TryCreate(Guid.NewGuid(), writerRegistrationId, readerRegistrationId);
-        Assert.NotNull(transferId);
-        return transferId.Value;
+        var result = registry.TryCreate(Guid.NewGuid(), writerRegistrationId, readerRegistrationId, out var transferId);
+        Assert.Equal(CreateTransferResult.Created, result);
+        return transferId;
+    }
+
+    private static FileTransferRegistry CreateRegistry(
+        long dailyBytesPerUser = 0, long bytesPerSecondPerUser = 0, TimeProvider? clock = null)
+    {
+        // Limits default to off here so the pre-existing behavioural tests stay about
+        // what they were about; the quota/bandwidth tests opt in explicitly.
+        var options = Options.Create(new TransferLimitOptions
+        {
+            DailyBytesPerUser = dailyBytesPerUser,
+            BytesPerSecondPerUser = bytesPerSecondPerUser,
+        });
+        return new FileTransferRegistry(options, clock ?? TimeProvider.System);
+    }
+
+    /// <summary>Only the wall clock is faked; timers stay real (no test here sleeps on one).</summary>
+    private sealed class SettableClock(DateTimeOffset start) : TimeProvider
+    {
+        public DateTimeOffset UtcNow { get; set; } = start;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            return this.UtcNow;
+        }
     }
 }

@@ -42,6 +42,10 @@ internal sealed class DaemonHub(IDaemonConnectionRegistry registry, FileTransfer
                     throw new HubException("Chunk too large.");
                 }
 
+                // Quota + bandwidth, charged to the transfer's owner. Crossing the quota
+                // abandons the transfer, so the reader learns why instead of seeing a
+                // truncated file end quietly.
+                await transfers.MeterAsync(transferId, chunk.Length, CancellationToken.None);
                 await channel.Writer.WriteAsync(chunk);
             }
 

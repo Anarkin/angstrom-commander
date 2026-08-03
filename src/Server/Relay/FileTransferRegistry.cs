@@ -1,7 +1,16 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
+using Microsoft.Extensions.Options;
 
 namespace AngstromCommander.Server.Relay;
+
+/// <summary>Why a transfer could not be created — the endpoint picks the status code.</summary>
+internal enum CreateTransferResult
+{
+    Created,
+    TooManyConcurrent,
+    QuotaExhausted,
+}
 
 /// <summary>
 /// In-flight transfers. Each is a bounded channel with exactly one writer and one reader, so the
@@ -14,32 +23,48 @@ namespace AngstromCommander.Server.Relay;
 /// Either end may be a Daemon, so each side's registration is recorded and checked. Per-replica
 /// state like the connection registry; a cross-replica story arrives with it (ARCHITECTURE.md § Scaling).
 /// </summary>
-internal sealed class FileTransferRegistry
+internal sealed class FileTransferRegistry(IOptions<TransferLimitOptions> limits, TimeProvider clock)
 {
     private const int MaxBufferedChunks = 16;
     private const int MaxTransfersPerUser = 16;
 
     private readonly ConcurrentDictionary<Guid, PendingTransfer> _transfers = new();
+    private readonly ConcurrentDictionary<Guid, UserUsage> _usage = new();
 
     /// <summary>
-    /// Registers a transfer, or returns null when the user already has as many in flight as they
-    /// are allowed. A null registration id means that side is the HTTP request/response rather
-    /// than a Daemon.
+    /// Registers a transfer, or says why it will not: the user already has as many in flight as
+    /// they are allowed, or their daily byte quota is spent. A null registration id means that
+    /// side is the HTTP request/response rather than a Daemon.
     /// </summary>
     /// <remarks>
-    /// The cap is what keeps memory bounded: every live transfer holds a bounded channel, so
-    /// unlimited transfers is unlimited memory on a Server shared with everyone else's machines.
-    /// Counting and inserting are not one atomic step, so a burst of simultaneous requests can
-    /// land a little over the line — near enough for a resource guard, and far from unbounded.
+    /// The concurrency cap is what keeps memory bounded: every live transfer holds a bounded
+    /// channel, so unlimited transfers is unlimited memory on a Server shared with everyone
+    /// else's machines. Counting and inserting are not one atomic step, so a burst of
+    /// simultaneous requests can land a little over the line — near enough for a resource
+    /// guard, and far from unbounded.
     /// </remarks>
-    public Guid? TryCreate(Guid userId, Guid? writerRegistrationId, Guid? readerRegistrationId)
+    public CreateTransferResult TryCreate(
+        Guid userId, Guid? writerRegistrationId, Guid? readerRegistrationId, out Guid transferId)
     {
+        transferId = Guid.Empty;
         if (this._transfers.Count(entry => entry.Value.UserId == userId) >= MaxTransfersPerUser)
         {
-            return null;
+            return CreateTransferResult.TooManyConcurrent;
         }
 
-        var transferId = Guid.NewGuid();
+        var quota = limits.Value.DailyBytesPerUser;
+        if (quota > 0 && this._usage.TryGetValue(userId, out var usage))
+        {
+            lock (usage)
+            {
+                if (usage.Day == this.Today && usage.BytesToday >= quota)
+                {
+                    return CreateTransferResult.QuotaExhausted;
+                }
+            }
+        }
+
+        transferId = Guid.NewGuid();
         var channel = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(MaxBufferedChunks)
         {
             SingleReader = true,
@@ -47,7 +72,67 @@ internal sealed class FileTransferRegistry
         });
         this._transfers[transferId] = new PendingTransfer(
             userId, writerRegistrationId, readerRegistrationId, channel);
-        return transferId;
+        return CreateTransferResult.Created;
+    }
+
+    /// <summary>
+    /// Counts a chunk against the owner's daily quota and slows the caller to the configured
+    /// bandwidth. Call it once per chunk, before the chunk enters the transfer's channel —
+    /// between them the two call sites (the hub's incoming stream and the upload body pump)
+    /// see every relayed byte exactly once. Crossing the quota abandons the transfer and
+    /// throws <see cref="TransferQuotaExceededException"/>.
+    /// </summary>
+    public async Task MeterAsync(Guid transferId, int bytes, CancellationToken cancellationToken)
+    {
+        // A transfer that is already gone meters nothing; its bytes are going nowhere.
+        if (!this._transfers.TryGetValue(transferId, out var transfer))
+        {
+            return;
+        }
+
+        var usage = this._usage.GetOrAdd(transfer.UserId, static _ => new UserUsage());
+        TimeSpan wait;
+        lock (usage)
+        {
+            var now = clock.GetUtcNow();
+            var day = DateOnly.FromDateTime(now.UtcDateTime);
+            if (usage.Day != day)
+            {
+                usage.Day = day;
+                usage.BytesToday = 0;
+            }
+
+            usage.BytesToday += bytes;
+            var quota = limits.Value.DailyBytesPerUser;
+            if (quota > 0 && usage.BytesToday > quota)
+            {
+                this.Abandon(transferId, TransferQuotaExceededException.UserFacingMessage);
+                throw new TransferQuotaExceededException();
+            }
+
+            // Debt-based token bucket: the chunk always passes, and when it overdraws the
+            // balance the caller sleeps the debt off before sending the next one. Smooth,
+            // and immune to chunks larger than one second's allowance.
+            var rate = limits.Value.BytesPerSecondPerUser;
+            if (rate <= 0)
+            {
+                wait = TimeSpan.Zero;
+            }
+            else
+            {
+                var elapsed = now - usage.LastRefill;
+                usage.LastRefill = now;
+                usage.TokenBalance = Math.Min(rate, usage.TokenBalance + (elapsed.TotalSeconds * rate)) - bytes;
+                wait = usage.TokenBalance >= 0
+                    ? TimeSpan.Zero
+                    : TimeSpan.FromSeconds(-usage.TokenBalance / rate);
+            }
+        }
+
+        if (wait > TimeSpan.Zero)
+        {
+            await Task.Delay(wait, clock, cancellationToken);
+        }
     }
 
     /// <summary>Only the Daemon that was asked to send may write into the transfer.</summary>
@@ -135,6 +220,8 @@ internal sealed class FileTransferRegistry
         return true;
     }
 
+    private DateOnly Today => DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
+
     private sealed record PendingTransfer(
         Guid UserId,
         Guid? WriterRegistrationId,
@@ -143,5 +230,17 @@ internal sealed class FileTransferRegistry
     {
         public TaskCompletionSource<string?> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    /// <summary>Locked on itself; per-replica like everything else here.</summary>
+    private sealed class UserUsage
+    {
+        public DateOnly Day { get; set; }
+
+        public long BytesToday { get; set; }
+
+        public double TokenBalance { get; set; }
+
+        public DateTimeOffset LastRefill { get; set; }
     }
 }

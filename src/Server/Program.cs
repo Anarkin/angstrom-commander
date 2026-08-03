@@ -51,6 +51,8 @@ builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
     policy.AllowAnyHeader().AllowAnyMethod().WithExposedHeaders("Content-Disposition");
 }));
 builder.Services.AddSingleton<IDaemonConnectionRegistry, InMemoryDaemonConnectionRegistry>();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.Configure<TransferLimitOptions>(builder.Configuration.GetSection(TransferLimitOptions.SectionName));
 builder.Services.AddSingleton<FileTransferRegistry>();
 
 builder.Services.AddDbContext<AppDbContext>(options =>

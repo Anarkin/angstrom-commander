@@ -25,6 +25,9 @@ internal sealed class ServerFactory(string connectionString) : WebApplicationFac
     /// <summary>Browser origins allowed to call the API; only consulted outside Development.</summary>
     public IReadOnlyList<string> AllowedOrigins { get; init; } = [];
 
+    /// <summary>Per-user daily relay quota in bytes; null keeps the appsettings default.</summary>
+    public long? DailyBytesPerUser { get; init; }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         if (this.Environment is not null)
@@ -38,6 +41,12 @@ internal sealed class ServerFactory(string connectionString) : WebApplicationFac
         builder.UseSetting(
             "RateLimiting:AuthenticationPermitsPerMinute",
             this.AuthenticationPermitsPerMinute.ToString(CultureInfo.InvariantCulture));
+
+        if (this.DailyBytesPerUser is long dailyBytes)
+        {
+            builder.UseSetting(
+                "TransferLimits:DailyBytesPerUser", dailyBytes.ToString(CultureInfo.InvariantCulture));
+        }
 
         for (var index = 0; index < this.AllowedOrigins.Count; index++)
         {

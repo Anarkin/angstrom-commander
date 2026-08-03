@@ -70,6 +70,8 @@ GET {{server}}/api/daemons/{{registrationId}}/download?path=/data/README.md
 Authorization: Bearer {{token}}
 
 ### 7. Upload a file (streams request body -> Server -> Daemon; /uploads is the writable root)
+#    Transfers are also bounded per user: a daily byte quota and a bandwidth cap
+#    (TransferLimits in appsettings) — past the quota, transfer endpoints answer 429.
 POST {{server}}/api/daemons/{{registrationId}}/upload?path=/uploads/hello.txt&overwrite=true
 Authorization: Bearer {{token}}
 Content-Type: application/octet-stream
