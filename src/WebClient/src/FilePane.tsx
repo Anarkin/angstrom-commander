@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { formatSize, formatTimestamp, joinPath, parentPath } from "./formatting";
-import { downloadFile, listDirectory, listRoots, uploadFile } from "./serverApi/files";
+import {
+    createDirectory,
+    deleteEntry,
+    downloadFile,
+    listDirectory,
+    listRoots,
+    moveEntry,
+    uploadFile,
+} from "./serverApi/files";
 import type { DirectoryEntry, Machine, SharedRoot } from "./serverApi/types";
 
 export interface PaneState {
@@ -38,7 +46,11 @@ export function FilePane({
 }: FilePaneProps) {
     const [entries, setEntries] = useState<DirectoryEntry[] | null>(null);
     const [roots, setRoots] = useState<SharedRoot[] | null>(null);
+    // Action feedback ("Deleted x.") and listing failures have different lifetimes: a
+    // reload after an action must not wipe the action's own message, while a listing
+    // error should clear itself the moment a later navigation succeeds.
     const [message, setMessage] = useState<string | null>(null);
+    const [listError, setListError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const [localReload, setLocalReload] = useState(0);
     const fileInput = useRef<HTMLInputElement>(null);
@@ -92,7 +104,7 @@ export function FilePane({
                     return;
                 }
 
-                setMessage(null);
+                setListError(null);
                 const sorted = [...listed].sort(
                     (left, right) =>
                         Number(right.isDirectory) - Number(left.isDirectory) || left.name.localeCompare(right.name),
@@ -103,7 +115,7 @@ export function FilePane({
             .catch((error: unknown) => {
                 if (active) {
                     setEntries(null);
-                    setMessage(onFailure(error));
+                    setListError(onFailure(error));
                     onEntriesLoaded([]);
                 }
             });
@@ -120,6 +132,7 @@ export function FilePane({
     function open(entry: DirectoryEntry) {
         if (entry.isDirectory) {
             onSelect(null);
+            setMessage(null);
             onStateChange({ registrationId, path: joinPath(path, entry.name) });
         } else {
             onSelect(entry);
@@ -142,6 +155,74 @@ export function FilePane({
                 // Revoking in the same tick cancels the download in some browsers: the click only
                 // queues it, and the URL has to outlive that.
                 setTimeout(() => URL.revokeObjectURL(url), 60_000);
+            })
+            .catch((error: unknown) => setMessage(onFailure(error)))
+            .finally(() => setBusy(false));
+    }
+
+    function newFolder() {
+        if (registrationId === null) {
+            return;
+        }
+
+        const name = window.prompt("New folder name")?.trim();
+        if (name === undefined || name === "") {
+            return;
+        }
+
+        setBusy(true);
+        setMessage(null);
+        createDirectory(registrationId, joinPath(path, name))
+            .then(() => {
+                setMessage(`Created ${name}.`);
+                onChanged();
+                reload();
+            })
+            .catch((error: unknown) => setMessage(onFailure(error)))
+            .finally(() => setBusy(false));
+    }
+
+    function rename(entry: DirectoryEntry) {
+        if (registrationId === null) {
+            return;
+        }
+
+        const name = window.prompt(`Rename "${entry.name}" to`, entry.name)?.trim();
+        if (name === undefined || name === "" || name === entry.name) {
+            return;
+        }
+
+        setBusy(true);
+        setMessage(null);
+        moveEntry(registrationId, joinPath(path, entry.name), joinPath(path, name))
+            .then(() => {
+                setMessage(`Renamed to ${name}.`);
+                onSelect(null);
+                onChanged();
+                reload();
+            })
+            .catch((error: unknown) => setMessage(onFailure(error)))
+            .finally(() => setBusy(false));
+    }
+
+    function remove(entry: DirectoryEntry) {
+        if (registrationId === null) {
+            return;
+        }
+
+        const warning = entry.isDirectory ? `Delete "${entry.name}" and everything in it?` : `Delete "${entry.name}"?`;
+        if (!window.confirm(warning)) {
+            return;
+        }
+
+        setBusy(true);
+        setMessage(null);
+        deleteEntry(registrationId, joinPath(path, entry.name))
+            .then(() => {
+                setMessage(`Deleted ${entry.name}.`);
+                onSelect(null);
+                onChanged();
+                reload();
             })
             .catch((error: unknown) => setMessage(onFailure(error)))
             .finally(() => setBusy(false));
@@ -171,7 +252,7 @@ export function FilePane({
             .finally(() => setBusy(false));
     }
 
-    const loading = registrationId !== null && entries === null && message === null;
+    const loading = registrationId !== null && entries === null && listError === null;
 
     return (
         <section className="card pane">
@@ -251,6 +332,9 @@ export function FilePane({
                 <button type="button" disabled={registrationId === null} onClick={reload}>
                     Go
                 </button>
+                <button type="button" disabled={registrationId === null || busy} onClick={newFolder}>
+                    New folder
+                </button>
             </div>
 
             {registrationId !== null && roots !== null && roots.length === 0 && (
@@ -280,17 +364,40 @@ export function FilePane({
                                 <td className="muted">{formatSize(entry)}</td>
                                 <td className="muted">{formatTimestamp(entry.modifiedAt)}</td>
                                 <td>
-                                    {!entry.isDirectory && (
+                                    <div className="row">
+                                        {!entry.isDirectory && (
+                                            <button
+                                                type="button"
+                                                disabled={busy}
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    download(entry);
+                                                }}
+                                            >
+                                                Download
+                                            </button>
+                                        )}
                                         <button
                                             type="button"
+                                            disabled={busy}
                                             onClick={(event) => {
                                                 event.stopPropagation();
-                                                download(entry);
+                                                rename(entry);
                                             }}
                                         >
-                                            Download
+                                            Rename
                                         </button>
-                                    )}
+                                        <button
+                                            type="button"
+                                            disabled={busy}
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                remove(entry);
+                                            }}
+                                        >
+                                            Delete
+                                        </button>
+                                    </div>
                                 </td>
                             </tr>
                         ))}
@@ -314,7 +421,7 @@ export function FilePane({
                 />
             </div>
 
-            {message !== null && <p className="notice">{message}</p>}
+            {(message ?? listError) !== null && <p className="notice">{message ?? listError}</p>}
         </section>
     );
 }

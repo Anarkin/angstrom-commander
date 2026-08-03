@@ -16,6 +16,9 @@ builder.Services.AddSingleton<ListRootsHandler>();
 builder.Services.AddSingleton<ListDirectoryHandler>();
 builder.Services.AddSingleton<DownloadFileHandler>();
 builder.Services.AddSingleton<UploadFileHandler>();
+builder.Services.AddSingleton<CreateDirectoryHandler>();
+builder.Services.AddSingleton<MoveEntryHandler>();
+builder.Services.AddSingleton<DeleteEntryHandler>();
 builder.Services.AddSingleton<DaemonIdentityStore>();
 builder.Services.AddHttpClient<ServerApiClient>(static (sp, client) =>
 {

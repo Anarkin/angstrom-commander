@@ -625,6 +625,57 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task MutationsRelayAndSurfaceTheDaemonsAnswer()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+        using var userClient = factory.CreateClient();
+        var userToken = await RegisterAndLoginAsync(userClient, "mutations@example.com");
+        userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+
+        // The canned Daemon accepts everything under /uploads and refuses the rest with
+        // the sandbox's own words.
+        var (registrationId, connection) = await ConnectDaemonAsync(factory, userClient, conn =>
+        {
+            conn.On<CreateDirectoryRequest, FileOperationResponse>(
+                DaemonHubMethods.CreateDirectory,
+                static request => request.Path.StartsWith("/uploads", StringComparison.Ordinal)
+                    ? FileOperationResponse.Success
+                    : FileOperationResponse.ForError("Path is not inside a writable root."));
+            conn.On<MoveEntryRequest, FileOperationResponse>(
+                DaemonHubMethods.MoveEntry,
+                static _ => FileOperationResponse.Success);
+            conn.On<DeleteEntryRequest, FileOperationResponse>(
+                DaemonHubMethods.DeleteEntry,
+                static _ => FileOperationResponse.Success);
+        });
+
+        await using (connection)
+        {
+            using var mkdir = await userClient.PostAsync(
+                new Uri($"/api/daemons/{registrationId}/mkdir?path=/uploads/new", UriKind.Relative), null);
+            Assert.Equal(HttpStatusCode.NoContent, mkdir.StatusCode);
+
+            using var move = await userClient.PostAsync(
+                new Uri(
+                    $"/api/daemons/{registrationId}/move?sourcePath=/uploads/a.txt&targetPath=/uploads/b.txt",
+                    UriKind.Relative),
+                null);
+            Assert.Equal(HttpStatusCode.NoContent, move.StatusCode);
+
+            using var delete = await userClient.DeleteAsync(
+                new Uri($"/api/daemons/{registrationId}/entries?path=/uploads/b.txt", UriKind.Relative));
+            Assert.Equal(HttpStatusCode.NoContent, delete.StatusCode);
+
+            // A refusal arrives as a 400 carrying the Daemon's reason, ready for a screen.
+            using var refused = await userClient.PostAsync(
+                new Uri($"/api/daemons/{registrationId}/mkdir?path=/data/nope", UriKind.Relative), null);
+            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+            Assert.Contains(
+                "writable root", await refused.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public async Task CopyMovesBytesBetweenTwoMachines()
     {
         using var factory = new ServerFactory(postgres.ConnectionString);

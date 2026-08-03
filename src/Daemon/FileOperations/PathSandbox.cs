@@ -58,6 +58,59 @@ internal sealed class PathSandbox
         return this.TryResolve(requestedPath, requireWritable: true, out resolvedPath);
     }
 
+    /// <summary>
+    /// Resolves a path about to be created, renamed, or deleted. The parent directory gets
+    /// the full write resolution (links followed, writable root required), but the final
+    /// component is taken as it is — deleting or moving a link must act on the link itself,
+    /// never on whatever it points at, and full resolution would swap one for the other.
+    /// The shared roots themselves are refused: sharing a folder is not permission to
+    /// delete or rename the folder.
+    /// </summary>
+    public bool TryResolveForMutation(string requestedPath, out string resolvedPath)
+    {
+        resolvedPath = string.Empty;
+
+        string canonical;
+        try
+        {
+            canonical = Path.TrimEndingDirectorySeparator(Path.GetFullPath(requestedPath));
+        }
+        catch (Exception ex) when (ex is ArgumentException or PathTooLongException or NotSupportedException)
+        {
+            return false;
+        }
+
+        var parent = Path.GetDirectoryName(canonical);
+        var name = Path.GetFileName(canonical);
+        if (string.IsNullOrEmpty(parent) || string.IsNullOrEmpty(name))
+        {
+            // A filesystem root has no parent to resolve and is nobody's to mutate.
+            return false;
+        }
+
+        if (!this.TryResolveForWrite(parent, out var resolvedParent))
+        {
+            return false;
+        }
+
+        var candidate = Path.Combine(resolvedParent, name);
+        foreach (var root in this._allowedRoots)
+        {
+            if (candidate.Equals(root.Path, PathComparison))
+            {
+                return false;
+            }
+        }
+
+        if (this._neverShared is not null && Contains(this._neverShared, candidate))
+        {
+            return false;
+        }
+
+        resolvedPath = candidate;
+        return true;
+    }
+
     private bool TryResolve(string requestedPath, bool requireWritable, out string resolvedPath)
     {
         resolvedPath = string.Empty;

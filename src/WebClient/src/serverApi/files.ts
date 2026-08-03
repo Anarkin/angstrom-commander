@@ -10,6 +10,28 @@ export async function listRoots(registrationId: string): Promise<SharedRoot[]> {
     return await sendForJson<SharedRoot[]>(`/api/daemons/${registrationId}/roots`);
 }
 
+export async function createDirectory(registrationId: string, path: string): Promise<void> {
+    const query = new URLSearchParams({ path });
+    await send(`/api/daemons/${registrationId}/mkdir?${query.toString()}`, { method: "POST" });
+}
+
+/** Rename is a move with the same parent — one call covers both. */
+export async function moveEntry(
+    registrationId: string,
+    sourcePath: string,
+    targetPath: string,
+    overwrite = false,
+): Promise<void> {
+    const query = new URLSearchParams({ sourcePath, targetPath, overwrite: String(overwrite) });
+    await send(`/api/daemons/${registrationId}/move?${query.toString()}`, { method: "POST" });
+}
+
+/** Deletes a file, or a directory with everything in it. */
+export async function deleteEntry(registrationId: string, path: string): Promise<void> {
+    const query = new URLSearchParams({ path });
+    await send(`/api/daemons/${registrationId}/entries?${query.toString()}`, { method: "DELETE" });
+}
+
 /** How much of the daily relay allowance is spent; limit 0 means none is configured. */
 export async function getTransferUsage(): Promise<TransferUsage> {
     return await sendForJson<TransferUsage>("/api/transfers/usage");

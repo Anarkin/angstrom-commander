@@ -13,6 +13,8 @@
 GET {{server}}/healthz
 
 ### 1. Register an account (once per email)
+#    Only where registration is open: Development (local) is, standing environments are
+#    closed by default and answer 403 — flip Registration__Enabled on the stamp to open one.
 POST {{server}}/api/auth/register
 Content-Type: application/json
 
@@ -107,6 +109,26 @@ Authorization: Bearer {{token}}
 ### 8. Copy a file machine-to-machine (source and target may be the same machine)
 #    Bytes go source -> Server -> target, never buffered whole, no client round trip.
 POST {{server}}/api/daemons/{{registrationId}}/copy-to/{{registrationId}}?sourcePath=/data/README.md&targetPath=/uploads/README-copy.md&overwrite=true
+Authorization: Bearer {{token}}
+
+### 8b. Make a directory (writable roots only)
+POST {{server}}/api/daemons/{{registrationId}}/mkdir?path=/uploads/new-folder
+Authorization: Bearer {{token}}
+
+### Rename = move with the same parent (overwrite=true replaces an existing FILE target)
+POST {{server}}/api/daemons/{{registrationId}}/move?sourcePath=/uploads/hello.txt&targetPath=/uploads/renamed.txt
+Authorization: Bearer {{token}}
+
+### Delete a file, or a directory with everything in it
+DELETE {{server}}/api/daemons/{{registrationId}}/entries?path=/uploads/renamed.txt
+Authorization: Bearer {{token}}
+
+### Mutations in a read-only root are refused → 400
+POST {{server}}/api/daemons/{{registrationId}}/mkdir?path=/data/nope
+Authorization: Bearer {{token}}
+
+### A shared root itself can never be deleted → 400
+DELETE {{server}}/api/daemons/{{registrationId}}/entries?path=/uploads
 Authorization: Bearer {{token}}
 
 ### Sandbox refusal — outside every allowed root → 400

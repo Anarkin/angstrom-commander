@@ -369,6 +369,41 @@ internal static class RelayEndpoints
             .ProducesRelayProblems()
             .RequireAuthorization(AuthPolicies.User);
 
+        // The three mutations share one shape: relay the request, surface the Daemon's
+        // refusal as a 400 the user can read, answer 204 on success.
+        app.MapPost(
+            "/api/daemons/{registrationId:guid}/mkdir",
+            static (Guid registrationId, string path, HttpContext http, AppDbContext db,
+                    IDaemonConnectionRegistry registry, IHubContext<DaemonHub> hub, CancellationToken ct) =>
+                InvokeMutationAsync(
+                    registrationId, DaemonHubMethods.CreateDirectory, new CreateDirectoryRequest(path),
+                    http, db, registry, hub, ct))
+            .ProducesRelayProblems()
+            .RequireAuthorization(AuthPolicies.User);
+
+        // Rename is a move with the same parent; the WebClient's Rename button calls this.
+        app.MapPost(
+            "/api/daemons/{registrationId:guid}/move",
+            static (Guid registrationId, string sourcePath, string targetPath, bool? overwrite,
+                    HttpContext http, AppDbContext db,
+                    IDaemonConnectionRegistry registry, IHubContext<DaemonHub> hub, CancellationToken ct) =>
+                InvokeMutationAsync(
+                    registrationId, DaemonHubMethods.MoveEntry,
+                    new MoveEntryRequest(sourcePath, targetPath, overwrite ?? false),
+                    http, db, registry, hub, ct))
+            .ProducesRelayProblems()
+            .RequireAuthorization(AuthPolicies.User);
+
+        app.MapDelete(
+            "/api/daemons/{registrationId:guid}/entries",
+            static (Guid registrationId, string path, HttpContext http, AppDbContext db,
+                    IDaemonConnectionRegistry registry, IHubContext<DaemonHub> hub, CancellationToken ct) =>
+                InvokeMutationAsync(
+                    registrationId, DaemonHubMethods.DeleteEntry, new DeleteEntryRequest(path),
+                    http, db, registry, hub, ct))
+            .ProducesRelayProblems()
+            .RequireAuthorization(AuthPolicies.User);
+
         // The dual-pane move: bytes go source Daemon -> Server -> target Daemon without ever
         // being buffered whole, and without a round trip through the client.
         app.MapPost(
@@ -462,6 +497,47 @@ internal static class RelayEndpoints
             .RequireAuthorization(AuthPolicies.User);
 
         return app;
+    }
+
+    private static async Task<Results<NoContent, ProblemHttpResult>> InvokeMutationAsync<TRequest>(
+        Guid registrationId,
+        string method,
+        TRequest request,
+        HttpContext http,
+        AppDbContext db,
+        IDaemonConnectionRegistry registry,
+        IHubContext<DaemonHub> hub,
+        CancellationToken cancellationToken)
+    {
+        if (!await OwnsMachineAsync(db, http, registrationId, cancellationToken))
+        {
+            return NoSuchMachine();
+        }
+
+        if (!registry.TryGetConnection(registrationId.ToString(), out var connectionId))
+        {
+            return MachineOffline();
+        }
+
+        FileOperationResponse response;
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(OperationTimeout);
+            response = await hub.Clients.Client(connectionId)
+                .InvokeAsync<FileOperationResponse>(method, request, timeout.Token);
+        }
+        catch (Exception ex) when (ex is IOException or OperationCanceledException)
+        {
+            return MachineSilent();
+        }
+
+        if (response.Error is not null)
+        {
+            return TypedResults.Problem(detail: response.Error, statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        return TypedResults.NoContent();
     }
 
     private static async Task<long> PumpRequestBodyAsync(

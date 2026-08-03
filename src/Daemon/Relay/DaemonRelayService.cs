@@ -23,6 +23,9 @@ internal sealed partial class DaemonRelayService(
     ListDirectoryHandler listDirectoryHandler,
     DownloadFileHandler downloadFileHandler,
     UploadFileHandler uploadFileHandler,
+    CreateDirectoryHandler createDirectoryHandler,
+    MoveEntryHandler moveEntryHandler,
+    DeleteEntryHandler deleteEntryHandler,
     ILogger<DaemonRelayService> logger) : BackgroundService
 {
     private const int DownloadChunkBytes = 64 * 1024;
@@ -80,6 +83,18 @@ internal sealed partial class DaemonRelayService(
         connection.On(DaemonHubMethods.Revoked, () => revoked.TrySetResult());
 
         connection.On(DaemonHubMethods.ListRoots, () => listRootsHandler.Handle());
+
+        connection.On<CreateDirectoryRequest, FileOperationResponse>(
+            DaemonHubMethods.CreateDirectory,
+            request => createDirectoryHandler.Handle(request));
+
+        connection.On<MoveEntryRequest, FileOperationResponse>(
+            DaemonHubMethods.MoveEntry,
+            request => moveEntryHandler.Handle(request));
+
+        connection.On<DeleteEntryRequest, FileOperationResponse>(
+            DaemonHubMethods.DeleteEntry,
+            request => deleteEntryHandler.Handle(request));
 
         connection.On<ListDirectoryRequest, ListDirectoryResponse>(
             DaemonHubMethods.ListDirectory,

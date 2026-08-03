@@ -219,6 +219,68 @@ test("a copy that would replace a file is not sent when the user declines", asyn
     expect(calls.some((call) => call.url.includes("/copy-to/"))).toBe(false);
 });
 
+test("new folder prompts for a name and creates it in the current path", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    const calls = stubApi({ "/list": [notes] });
+    vi.spyOn(window, "prompt").mockReturnValue("reports");
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(await screen.findByLabelText("Left: machine"), homeMachine.registrationId);
+    await user.click((await screen.findAllByRole("button", { name: /new folder/i }))[0]!);
+
+    expect(await screen.findByText(/created reports/i)).toBeInTheDocument();
+    const mkdirCall = calls.find((call) => call.url.includes("/mkdir"));
+    expect(mkdirCall?.method).toBe("POST");
+    expect(mkdirCall?.url).toContain("path=%2Fdata%2Freports");
+});
+
+test("rename prompts and moves the entry within its directory", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    const calls = stubApi({ "/list": [notes] });
+    vi.spyOn(window, "prompt").mockReturnValue("renamed.txt");
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(await screen.findByLabelText("Left: machine"), homeMachine.registrationId);
+    await user.click((await screen.findAllByRole("button", { name: /rename/i }))[0]!);
+
+    expect(await screen.findByText(/renamed to renamed\.txt/i)).toBeInTheDocument();
+    const moveCall = calls.find((call) => call.url.includes("/move"));
+    expect(moveCall?.method).toBe("POST");
+    expect(moveCall?.url).toContain("sourcePath=%2Fdata%2Fnotes.txt");
+    expect(moveCall?.url).toContain("targetPath=%2Fdata%2Frenamed.txt");
+});
+
+test("delete asks first and removes the entry", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    const calls = stubApi({ "/list": [notes] });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(await screen.findByLabelText("Left: machine"), homeMachine.registrationId);
+    await user.click((await screen.findAllByRole("button", { name: /^delete$/i }))[0]!);
+
+    expect(await screen.findByText(/deleted notes\.txt/i)).toBeInTheDocument();
+    expect(confirm).toHaveBeenCalled();
+    const deleteCall = calls.find((call) => call.method === "DELETE" && call.url.includes("/entries"));
+    expect(deleteCall?.url).toContain("path=%2Fdata%2Fnotes.txt");
+});
+
+test("declining the delete confirmation sends nothing", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    const calls = stubApi({ "/list": [notes] });
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(await screen.findByLabelText("Left: machine"), homeMachine.registrationId);
+    await user.click((await screen.findAllByRole("button", { name: /^delete$/i }))[0]!);
+
+    expect(calls.some((call) => call.url.includes("/entries"))).toBe(false);
+});
+
 test("unpairing a machine asks first, then deletes and refreshes the list", async () => {
     localStorage.setItem("angstrom.accessToken", "token-abc");
     const calls = stubApi();
