@@ -3,6 +3,7 @@ import { FilePane } from "./FilePane";
 import type { PaneState } from "./FilePane";
 import { MachinesPanel } from "./MachinesPanel";
 import { SignInScreen } from "./SignInScreen";
+import { TransferAllowance } from "./TransferAllowance";
 import { copyBetweenMachines, listMachines } from "./serverApi/files";
 import type { DirectoryEntry, Machine } from "./serverApi/types";
 import { joinPath } from "./formatting";
@@ -106,7 +107,10 @@ function App() {
             </div>
 
             {view === "settings" && (
-                <MachinesPanel machines={machines} onRefresh={refreshMachines} onFailure={handleFailure} />
+                <>
+                    <MachinesPanel machines={machines} onRefresh={refreshMachines} onFailure={handleFailure} />
+                    <TransferAllowance onFailure={handleFailure} />
+                </>
             )}
 
             <div className="panes" hidden={view !== "commander"}>

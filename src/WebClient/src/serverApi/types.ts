@@ -11,6 +11,7 @@ export type LoginResponse = Schemas["LoginResponse"];
 export type RegisterResponse = Schemas["RegisterResponse"];
 export type ClaimResponse = Schemas["ClaimResponse"];
 export type Transfer = Schemas["TransferResponse"];
+export type TransferUsage = Schemas["TransferUsageResponse"];
 export type ProblemDetails = Schemas["ProblemDetails"];
 export type ValidationProblemDetails = Schemas["HttpValidationProblemDetails"];
 
@@ -25,4 +26,13 @@ export function sizeInBytes(entry: DirectoryEntry): number | null {
     }
 
     return typeof entry.sizeBytes === "string" ? Number(entry.sizeBytes) : entry.sizeBytes;
+}
+
+/** The same int64 normalization for any long-typed contract field. */
+export function asByteCount(value: number | string | null | undefined): number {
+    if (value === null || value === undefined) {
+        return 0;
+    }
+
+    return typeof value === "string" ? Number(value) : value;
 }

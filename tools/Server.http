@@ -96,6 +96,10 @@ should not land
 GET {{server}}/api/daemons/{{registrationId}}/list?path=/uploads
 Authorization: Bearer {{token}}
 
+### How much of today's transfer allowance is spent (bytes; limit 0 = none configured)
+GET {{server}}/api/transfers/usage
+Authorization: Bearer {{token}}
+
 ### 8. Copy a file machine-to-machine (source and target may be the same machine)
 #    Bytes go source -> Server -> target, never buffered whole, no client round trip.
 POST {{server}}/api/daemons/{{registrationId}}/copy-to/{{registrationId}}?sourcePath=/data/README.md&targetPath=/uploads/README-copy.md&overwrite=true

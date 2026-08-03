@@ -45,6 +45,19 @@ internal static class RelayEndpoints
             })
             .RequireAuthorization(AuthPolicies.User);
 
+        // How much of the daily relay allowance this user has spent — for the WebClient's
+        // progress bar. Zero limit means the environment runs without one.
+        app.MapGet(
+            "/api/transfers/usage",
+            static Ok<TransferUsageResponse> (
+                HttpContext http,
+                FileTransferRegistry transfers,
+                Microsoft.Extensions.Options.IOptions<TransferLimitOptions> limits) =>
+                TypedResults.Ok(new TransferUsageResponse(
+                    transfers.BytesUsedToday(GetUserId(http)),
+                    limits.Value.DailyBytesPerUser)))
+            .RequireAuthorization(AuthPolicies.User);
+
         // The opposite of enrollment: a soft revoke. The row stays (auditable), but every
         // query filters on RevokedAt, so the machine vanishes from the list, relay ops
         // refuse it, and the challenge endpoint stops recognizing it — the Daemon reacts
@@ -552,6 +565,9 @@ internal static class RelayEndpoints
 
 /// <summary>How many bytes a completed transfer moved.</summary>
 internal sealed record TransferResponse(long BytesTransferred);
+
+/// <summary>How much of the caller's daily relay allowance is spent; a zero limit means none is configured.</summary>
+internal sealed record TransferUsageResponse(long BytesUsedToday, long DailyLimitBytes);
 
 /// <summary>One of the caller's paired machines.</summary>
 internal sealed record MachineResponse(

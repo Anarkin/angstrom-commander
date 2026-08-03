@@ -220,6 +220,20 @@ internal sealed class FileTransferRegistry(IOptions<TransferLimitOptions> limits
         return true;
     }
 
+    /// <summary>What today's metering has already charged the user; zero once the day rolls.</summary>
+    public long BytesUsedToday(Guid userId)
+    {
+        if (!this._usage.TryGetValue(userId, out var usage))
+        {
+            return 0;
+        }
+
+        lock (usage)
+        {
+            return usage.Day == this.Today ? usage.BytesToday : 0;
+        }
+    }
+
     private DateOnly Today => DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
 
     private sealed record PendingTransfer(

@@ -49,6 +49,17 @@ h2 {
     gap: 0.7rem;
 }
 
+progress {
+    width: 100%;
+    accent-color: var(--online);
+}
+
+.hint {
+    cursor: help;
+    text-transform: none;
+    letter-spacing: normal;
+}
+
 .sign-in form {
     display: flex;
     flex-direction: column;

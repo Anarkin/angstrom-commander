@@ -3,9 +3,10 @@ import type { DirectoryEntry } from "./serverApi/types";
 
 export function formatSize(entry: DirectoryEntry): string {
     const bytes = sizeInBytes(entry);
-    if (bytes === null) {
-        return "";
-    }
+    return bytes === null ? "" : formatBytes(bytes);
+}
+
+export function formatBytes(bytes: number): string {
     if (bytes < 1024) {
         return `${bytes} B`;
     }

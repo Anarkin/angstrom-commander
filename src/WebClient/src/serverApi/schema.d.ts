@@ -438,6 +438,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/transfers/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TransferUsageResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/daemons/{registrationId}": {
         parameters: {
             query?: never;
@@ -926,6 +961,13 @@ export interface components {
         TransferResponse: {
             /** Format: int64 */
             bytesTransferred: number | string;
+        };
+        /** @description How much of the caller's daily relay allowance is spent; a zero limit means none is configured. */
+        TransferUsageResponse: {
+            /** Format: int64 */
+            bytesUsedToday: number | string;
+            /** Format: int64 */
+            dailyLimitBytes: number | string;
         };
     };
     responses: never;

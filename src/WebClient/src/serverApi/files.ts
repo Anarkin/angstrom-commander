@@ -1,8 +1,13 @@
 import { send, sendForJson } from "./http";
-import type { DirectoryEntry, Machine, Transfer } from "./types";
+import type { DirectoryEntry, Machine, Transfer, TransferUsage } from "./types";
 
 export async function listMachines(): Promise<Machine[]> {
     return await sendForJson<Machine[]>("/api/daemons");
+}
+
+/** How much of the daily relay allowance is spent; limit 0 means none is configured. */
+export async function getTransferUsage(): Promise<TransferUsage> {
+    return await sendForJson<TransferUsage>("/api/transfers/usage");
 }
 
 export async function listDirectory(registrationId: string, path: string): Promise<DirectoryEntry[]> {

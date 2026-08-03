@@ -207,6 +207,34 @@ test("unpairing a machine asks first, then deletes and refreshes the list", asyn
     expect(calls.filter((call) => call.method === "GET" && call.url === "/api/daemons").length).toBeGreaterThan(1);
 });
 
+test("settings shows the daily transfer allowance with the relay-only note", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    stubApi({ "/api/transfers/usage": { bytesUsedToday: 2_147_483_648, dailyLimitBytes: 10_737_418_240 } });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /settings/i }));
+
+    const bar = await screen.findByRole("progressbar");
+    expect(bar).toHaveAttribute("value", "2147483648");
+    expect(bar).toHaveAttribute("max", "10737418240");
+    expect(screen.getByText(/2\.0 GB of 10\.0 GB used today/i)).toBeInTheDocument();
+    // The tooltip carries the caveat that only relayed transfers count.
+    expect(screen.getByLabelText(/relayed through the cloud/i)).toHaveAttribute("title");
+});
+
+test("no allowance card when the environment has no limit configured", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    stubApi({ "/api/transfers/usage": { bytesUsedToday: 0, dailyLimitBytes: 0 } });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /settings/i }));
+
+    expect(await screen.findByRole("heading", { name: /my machines/i })).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).toBeNull();
+});
+
 test("declining the unpair confirmation sends nothing", async () => {
     localStorage.setItem("angstrom.accessToken", "token-abc");
     const calls = stubApi();

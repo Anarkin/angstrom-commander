@@ -550,6 +550,48 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task TransferUsageReportsWhatTheDayHasSpent()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString) { DailyBytesPerUser = 100_000 };
+        using var userClient = factory.CreateClient();
+        var userToken = await RegisterAndLoginAsync(userClient, "usage@example.com");
+        userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+
+        // Before any transfer, the allowance is untouched and the limit is the configured one.
+        var before = await GetAsync<UsageResponse>(userClient, new Uri("/api/transfers/usage", UriKind.Relative));
+        Assert.Equal(0, before.BytesUsedToday);
+        Assert.Equal(100_000, before.DailyLimitBytes);
+
+        var (registrationId, connection) = await ConnectDaemonAsync(factory, userClient, conn =>
+            conn.On<UploadFileRequest, UploadFileResponse>(
+                DaemonHubMethods.UploadFile,
+                request =>
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        await foreach (var _ in conn.StreamAsync<byte[]>(
+                            ServerHubMethods.DownloadFileChunks, request.TransferId))
+                        {
+                        }
+
+                        await conn.InvokeAsync(ServerHubMethods.CompleteTransfer, request.TransferId, null);
+                    });
+                    return UploadFileResponse.ForSuccess();
+                }));
+
+        await using (connection)
+        {
+            using var content = new ByteArrayContent(new byte[50_000]);
+            using var response = await userClient.PostAsync(
+                new Uri($"/api/daemons/{registrationId}/upload?path=/uploads/metered.bin", UriKind.Relative), content);
+            response.EnsureSuccessStatusCode();
+
+            var after = await GetAsync<UsageResponse>(userClient, new Uri("/api/transfers/usage", UriKind.Relative));
+            Assert.Equal(50_000, after.BytesUsedToday);
+        }
+    }
+
+    [Fact]
     public async Task UploadSurfacesRefusalFromTheMachine()
     {
         using var factory = new ServerFactory(postgres.ConnectionString);
@@ -730,6 +772,8 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
     private sealed record LoginResponse(string AccessToken);
 
     private sealed record TransferredResponse(long BytesTransferred);
+
+    private sealed record UsageResponse(long BytesUsedToday, long DailyLimitBytes);
 
     private sealed record MachineResponse(
         Guid RegistrationId, string DisplayName, string Platform, DateTimeOffset CreatedAt, DateTimeOffset? LastSeenAt, bool Online);

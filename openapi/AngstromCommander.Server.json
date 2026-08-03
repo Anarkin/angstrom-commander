@@ -338,6 +338,25 @@
         }
       }
     },
+    "/api/transfers/usage": {
+      "get": {
+        "tags": [
+          "AngstromCommander.Server"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferUsageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/daemons/{registrationId}": {
       "delete": {
         "tags": [
@@ -1132,6 +1151,32 @@
           }
         },
         "description": "How many bytes a completed transfer moved."
+      },
+      "TransferUsageResponse": {
+        "required": [
+          "bytesUsedToday",
+          "dailyLimitBytes"
+        ],
+        "type": "object",
+        "properties": {
+          "bytesUsedToday": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "dailyLimitBytes": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          }
+        },
+        "description": "How much of the caller's daily relay allowance is spent; a zero limit means none is configured."
       }
     }
   },
