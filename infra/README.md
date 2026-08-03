@@ -64,6 +64,21 @@ az containerapp hostname bind --hostname api.<env>.angstrom.adamlengyel.com \
 (The Static Web App's `app.` certificate needs no such step — Azure issues it on its
 own once the custom domain validates.)
 
+## Adding an environment — the full checklist
+
+The stamp itself is three commands (see above), but an environment's name also lives in
+a few hand-maintained spots. A new `qa` is not done until all of these know about it:
+
+1. `azd env new qa` + the two `azd env set` lines, then `azd provision -e qa`
+2. The one-time TLS bind for `api.qa.…` (section above)
+3. `azd deploy -e qa`
+4. `.vscode/settings.json` — a REST Client environment, so `tools/*.http` can target it
+5. `src/Daemon/Properties/launchSettings.json` — a launch profile, so
+   `dotnet run --launch-profile qa` connects a machine to it (its identity lands in
+   `state-qa/`)
+
+ARCHITECTURE.md § Hosting carries the environment glossary; add the name there too.
+
 ## Pausing an environment
 
 The two billable resources can be stopped without losing anything — accounts,

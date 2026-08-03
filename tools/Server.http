@@ -118,6 +118,15 @@ GET {{server}}/api/daemons/{{registrationId}}/list?path=/data
 GET {{server}}/api/daemons/00000000-0000-0000-0000-000000000000/list?path=/data
 Authorization: Bearer {{token}}
 
+### 9. Unpair a machine → 204. It vanishes from the list and every relay op answers 404;
+#     a connected Daemon discards its registration and prints a fresh pairing code.
+DELETE {{server}}/api/daemons/{{registrationId}}
+Authorization: Bearer {{token}}
+
+### Unpairing it again (or any unknown machine) → 404
+DELETE {{server}}/api/daemons/{{registrationId}}
+Authorization: Bearer {{token}}
+
 # Not included: /api/enrollment/code, /api/enrollment/status and /api/daemon-auth/* —
 # those are called by the Daemon itself (the token one needs an ECDsa signature you
 # can't produce in an .http file). Watch them happen in: docker compose logs daemon

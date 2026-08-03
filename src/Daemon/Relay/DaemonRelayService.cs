@@ -38,14 +38,45 @@ internal sealed partial class DaemonRelayService(
             return;
         }
 
-        var registrationId = identityStore.LoadRegistrationId()
-            ?? await this.EnrollAsync(stoppingToken);
+        // One iteration per machine identity: when the Server disowns the current
+        // registration (the user unpaired this machine), the dead registration is
+        // discarded and the next iteration re-enrolls from scratch, TV-style — back
+        // to showing a pairing code. Transient failures never land here; they are
+        // retried inside the iteration forever.
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            var registrationId = identityStore.LoadRegistrationId()
+                ?? await this.EnrollAsync(stoppingToken);
 
+            // Completed only on the Server's explicit verdict: a Revoked push while
+            // connected, or the challenge refusing to recognize the registration.
+            var revoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var again = await this.RunConnectionAsync(relayOptions, registrationId, revoked, stoppingToken);
+            if (!again)
+            {
+                return;
+            }
+
+            LogRevoked(logger);
+            identityStore.ClearRegistrationId();
+        }
+    }
+
+    /// <summary>Holds one connection for one registration; true = revoked, go re-enroll.</summary>
+    private async Task<bool> RunConnectionAsync(
+        RelayOptions relayOptions,
+        Guid registrationId,
+        TaskCompletionSource revoked,
+        CancellationToken stoppingToken)
+    {
         await using var connection = new HubConnectionBuilder()
-            .WithUrl(new Uri(relayOptions.ServerUrl, "/hub/daemon"), hubOptions =>
-                hubOptions.AccessTokenProvider = () => this.GetConnectionTokenAsync(registrationId))
+            .WithUrl(new Uri(relayOptions.ServerUrl!, "/hub/daemon"), hubOptions =>
+                hubOptions.AccessTokenProvider = () => this.GetConnectionTokenAsync(registrationId, revoked))
             .WithAutomaticReconnect(new AlwaysRetryPolicy())
             .Build();
+
+        connection.On(DaemonHubMethods.Revoked, () => revoked.TrySetResult());
 
         connection.On<ListDirectoryRequest, ListDirectoryResponse>(
             DaemonHubMethods.ListDirectory,
@@ -84,34 +115,30 @@ internal sealed partial class DaemonRelayService(
                 return response;
             });
 
-        while (!stoppingToken.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested && !revoked.Task.IsCompleted)
         {
             try
             {
                 await connection.StartAsync(stoppingToken);
-                LogConnected(logger, relayOptions.ServerUrl, registrationId);
+                LogConnected(logger, relayOptions.ServerUrl!, registrationId);
                 break;
             }
             catch (OperationCanceledException)
             {
-                return;
+                return false;
             }
             catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidOperationException or TimeoutException)
             {
-                LogConnectFailed(logger, relayOptions.ServerUrl, RetryDelay.TotalSeconds, ex);
+                LogConnectFailed(logger, relayOptions.ServerUrl!, RetryDelay.TotalSeconds, ex);
                 await Task.Delay(RetryDelay, stoppingToken);
             }
         }
 
-        try
-        {
-            // Stay alive until shutdown; WithAutomaticReconnect keeps the socket healthy.
-            await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken);
-        }
-        catch (OperationCanceledException)
-        {
-            // Normal shutdown.
-        }
+        // Stay alive until shutdown or revocation; WithAutomaticReconnect keeps the
+        // socket healthy in between (and a reconnect that meets the challenge refusal
+        // completes the revoked signal through the token provider).
+        await Task.WhenAny(revoked.Task, Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken));
+        return revoked.Task.IsCompleted && !stoppingToken.IsCancellationRequested;
     }
 
     private async Task<Guid> EnrollAsync(CancellationToken cancellationToken)
@@ -233,9 +260,18 @@ internal sealed partial class DaemonRelayService(
         }
     }
 
-    private async Task<string?> GetConnectionTokenAsync(Guid registrationId)
+    private async Task<string?> GetConnectionTokenAsync(Guid registrationId, TaskCompletionSource revoked)
     {
         var nonce = await serverApi.GetChallengeNonceAsync(registrationId, CancellationToken.None);
+        if (nonce is null)
+        {
+            // The Server does not recognize the registration: this machine was unpaired.
+            // Signal it and send no token — the doomed connection attempt that follows is
+            // abandoned as soon as the outer loop sees the signal.
+            revoked.TrySetResult();
+            return null;
+        }
+
         string signature;
         using (var key = identityStore.GetOrCreateKey())
         {
@@ -266,4 +302,7 @@ internal sealed partial class DaemonRelayService(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "File transfer {TransferId} aborted.")]
     private static partial void LogTransferAborted(ILogger logger, Guid transferId, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "This machine was unpaired on the Server; discarding the registration and starting fresh enrollment.")]
+    private static partial void LogRevoked(ILogger logger);
 }

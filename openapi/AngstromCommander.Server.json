@@ -338,6 +338,39 @@
         }
       }
     },
+    "/api/daemons/{registrationId}": {
+      "delete": {
+        "tags": [
+          "AngstromCommander.Server"
+        ],
+        "parameters": [
+          {
+            "name": "registrationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/daemons/{registrationId}/list": {
       "get": {
         "tags": [

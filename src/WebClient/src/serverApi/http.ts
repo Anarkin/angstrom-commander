@@ -36,7 +36,7 @@ export class ApiError extends Error {
 }
 
 interface RequestOptions {
-    method?: "GET" | "POST";
+    method?: "GET" | "POST" | "DELETE";
     body?: unknown;
     /** Sent as-is instead of JSON — file uploads stream their bytes this way. */
     rawBody?: Blob;

@@ -32,4 +32,9 @@ export async function claimPairingCode(code: string, displayName: string): Promi
     });
 }
 
+/** Unpairs a machine; it needs a fresh pairing code to ever come back. */
+export async function unpairMachine(registrationId: string): Promise<void> {
+    await send(`/api/daemons/${registrationId}`, { method: "DELETE" });
+}
+
 export { send };

@@ -27,10 +27,19 @@ internal sealed class ServerApiClient(HttpClient http)
         return (await response.Content.ReadFromJsonAsync<EnrollmentStatusResult>(cancellationToken))!.RegistrationId;
     }
 
-    public async Task<string> GetChallengeNonceAsync(Guid registrationId, CancellationToken cancellationToken)
+    /// <summary>
+    /// Null when the Server does not recognize the registration — revoked, or gone —
+    /// which is a verdict, unlike the transient failures that throw.
+    /// </summary>
+    public async Task<string?> GetChallengeNonceAsync(Guid registrationId, CancellationToken cancellationToken)
     {
         using var response = await http.PostAsJsonAsync(
             "/api/daemon-auth/challenge", new { registrationId }, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<ChallengeResult>(cancellationToken))!.Nonce;
     }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { claimPairingCode } from "./serverApi/auth";
+import { claimPairingCode, unpairMachine } from "./serverApi/auth";
 import type { Machine } from "./serverApi/types";
 
 interface MachinesPanelProps {
@@ -28,6 +28,22 @@ export function MachinesPanel({ machines, onRefresh, onFailure }: MachinesPanelP
             .finally(() => setBusy(false));
     }
 
+    function unpair(machine: Machine) {
+        if (!window.confirm(`Unpair "${machine.displayName}"? It will need a new pairing code to come back.`)) {
+            return;
+        }
+
+        setBusy(true);
+        setMessage(null);
+        unpairMachine(machine.registrationId)
+            .then(() => {
+                setMessage(`Unpaired ${machine.displayName}.`);
+                onRefresh();
+            })
+            .catch((error: unknown) => setMessage(onFailure(error)))
+            .finally(() => setBusy(false));
+    }
+
     return (
         <section className="card">
             <div className="row spread">
@@ -47,6 +63,9 @@ export function MachinesPanel({ machines, onRefresh, onFailure }: MachinesPanelP
                             <strong>{machine.displayName}</strong>
                             <span className="muted">{machine.platform}</span>
                             <span className="muted">{machine.online ? "online" : "offline"}</span>
+                            <button type="button" disabled={busy} onClick={() => unpair(machine)}>
+                                Unpair
+                            </button>
                         </li>
                     ))}
                 </ul>

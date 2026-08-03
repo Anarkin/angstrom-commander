@@ -51,6 +51,13 @@ internal sealed class DaemonIdentityStore(IOptions<RelayOptions> options)
             JsonSerializer.Serialize(new RegistrationState(registrationId)));
     }
 
+    // The keypair deliberately survives: it is this machine's identity, and re-enrolling
+    // binds the same public key to a fresh registration.
+    public void ClearRegistrationId()
+    {
+        File.Delete(Path.Combine(this.StateDirectory, RegistrationFileName));
+    }
+
     private string StateDirectory => options.Value.StateDirectory;
 
     private sealed record RegistrationState(Guid RegistrationId);

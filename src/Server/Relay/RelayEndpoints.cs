@@ -45,6 +45,54 @@ internal static class RelayEndpoints
             })
             .RequireAuthorization(AuthPolicies.User);
 
+        // The opposite of enrollment: a soft revoke. The row stays (auditable), but every
+        // query filters on RevokedAt, so the machine vanishes from the list, relay ops
+        // refuse it, and the challenge endpoint stops recognizing it — the Daemon reacts
+        // to that refusal by discarding its registration and re-entering enrollment.
+        app.MapDelete(
+            "/api/daemons/{registrationId:guid}",
+            static async Task<Results<NoContent, ProblemHttpResult>> (
+                Guid registrationId,
+                HttpContext http,
+                AppDbContext db,
+                IDaemonConnectionRegistry registry,
+                IHubContext<DaemonHub> hub,
+                CancellationToken cancellationToken) =>
+            {
+                var userId = GetUserId(http);
+                var registration = await db.DaemonRegistrations.FirstOrDefaultAsync(
+                    r => r.Id == registrationId && r.UserId == userId && r.RevokedAt == null,
+                    cancellationToken);
+                if (registration is null)
+                {
+                    return NoSuchMachine();
+                }
+
+                registration.RevokedAt = DateTimeOffset.UtcNow;
+                await db.SaveChangesAsync(cancellationToken);
+
+                // Courtesy push so a connected Daemon drops the dead registration now
+                // rather than on its next reconnect. Best effort: the revoke already
+                // succeeded, and a Daemon that misses this learns the same thing from
+                // the challenge refusal.
+                if (registry.TryGetConnection(registrationId.ToString(), out var connectionId))
+                {
+                    try
+                    {
+                        await hub.Clients.Client(connectionId)
+                            .SendAsync(DaemonHubMethods.Revoked, cancellationToken);
+                    }
+                    catch (Exception ex) when (ex is IOException or InvalidOperationException or OperationCanceledException)
+                    {
+                        // The socket died under us — which settles the matter anyway.
+                    }
+                }
+
+                return TypedResults.NoContent();
+            })
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireAuthorization(AuthPolicies.User);
+
         app.MapGet(
             "/api/daemons/{registrationId:guid}/list",
             static async Task<Results<Ok<IReadOnlyList<DirectoryEntry>>, ProblemHttpResult>> (

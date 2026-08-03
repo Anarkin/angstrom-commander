@@ -167,6 +167,72 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task UnpairRevokesTheMachineAndTellsItSo()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+
+        using var userClient = factory.CreateClient();
+        var userToken = await RegisterAndLoginAsync(userClient, "unpair@example.com");
+        userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+
+        // A connected Daemon listens for the courtesy push.
+        var told = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (registrationId, connection) = await ConnectDaemonAsync(factory, userClient, conn =>
+            conn.On(DaemonHubMethods.Revoked, () => told.TrySetResult()));
+
+        await using (connection)
+        {
+            using var unpair = await userClient.DeleteAsync(
+                new Uri($"/api/daemons/{registrationId}", UriKind.Relative));
+            Assert.Equal(HttpStatusCode.NoContent, unpair.StatusCode);
+
+            // The connected Daemon hears about it without waiting for a reconnect...
+            await told.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            // ...the machine is gone from the account, and every door is closed:
+            // relay ops, the challenge, and a second unpair all answer as if it never was.
+            var machines = await GetAsync<List<MachineResponse>>(userClient, new Uri("/api/daemons", UriKind.Relative));
+            Assert.Empty(machines);
+
+            using var listing = await userClient.GetAsync(
+                new Uri($"/api/daemons/{registrationId}/list?path=/data", UriKind.Relative));
+            Assert.Equal(HttpStatusCode.NotFound, listing.StatusCode);
+
+            using var daemonClient = factory.CreateClient();
+            using var challenge = await daemonClient.PostAsJsonAsync(
+                "/api/daemon-auth/challenge", new { registrationId });
+            Assert.Equal(HttpStatusCode.NotFound, challenge.StatusCode);
+
+            using var again = await userClient.DeleteAsync(
+                new Uri($"/api/daemons/{registrationId}", UriKind.Relative));
+            Assert.Equal(HttpStatusCode.NotFound, again.StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task StrangersCannotUnpairSomeoneElsesMachine()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+
+        using var ownerClient = factory.CreateClient();
+        var ownerToken = await RegisterAndLoginAsync(ownerClient, "unpair-owner@example.com");
+        ownerClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ownerToken);
+        var registrationId = await EnrollDaemonAsync(factory, ownerClient);
+
+        using var strangerClient = factory.CreateClient();
+        var strangerToken = await RegisterAndLoginAsync(strangerClient, "unpair-stranger@example.com");
+        strangerClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", strangerToken);
+
+        using var response = await strangerClient.DeleteAsync(
+            new Uri($"/api/daemons/{registrationId}", UriKind.Relative));
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+
+        // And the owner's machine is untouched.
+        var machines = await GetAsync<List<MachineResponse>>(ownerClient, new Uri("/api/daemons", UriKind.Relative));
+        Assert.Single(machines);
+    }
+
+    [Fact]
     public async Task RelayRequiresAuthentication()
     {
         using var factory = new ServerFactory(postgres.ConnectionString);
