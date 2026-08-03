@@ -2,17 +2,17 @@ import { send, sendForJson } from "./http";
 import type { DirectoryEntry, Machine, Transfer } from "./types";
 
 export async function listMachines(): Promise<Machine[]> {
-  return await sendForJson<Machine[]>("/api/daemons");
+    return await sendForJson<Machine[]>("/api/daemons");
 }
 
 export async function listDirectory(registrationId: string, path: string): Promise<DirectoryEntry[]> {
-  const query = new URLSearchParams({ path });
-  return await sendForJson<DirectoryEntry[]>(`/api/daemons/${registrationId}/list?${query.toString()}`);
+    const query = new URLSearchParams({ path });
+    return await sendForJson<DirectoryEntry[]>(`/api/daemons/${registrationId}/list?${query.toString()}`);
 }
 
 export interface DownloadedFile {
-  fileName: string;
-  blob: Blob;
+    fileName: string;
+    blob: Blob;
 }
 
 /**
@@ -22,27 +22,27 @@ export interface DownloadedFile {
  * eventual fix, letting the browser stream to disk natively).
  */
 export async function downloadFile(registrationId: string, path: string): Promise<DownloadedFile> {
-  const query = new URLSearchParams({ path });
-  const response = await send(`/api/daemons/${registrationId}/download?${query.toString()}`);
+    const query = new URLSearchParams({ path });
+    const response = await send(`/api/daemons/${registrationId}/download?${query.toString()}`);
 
-  return {
-    fileName: fileNameFrom(response.headers.get("Content-Disposition")) ?? baseNameOf(path),
-    blob: await response.blob(),
-  };
+    return {
+        fileName: fileNameFrom(response.headers.get("Content-Disposition")) ?? baseNameOf(path),
+        blob: await response.blob(),
+    };
 }
 
 /** Streams a file to a machine, into one of its writable roots. */
 export async function uploadFile(
-  registrationId: string,
-  path: string,
-  content: Blob,
-  overwrite = false,
+    registrationId: string,
+    path: string,
+    content: Blob,
+    overwrite = false,
 ): Promise<Transfer> {
-  const query = new URLSearchParams({ path, overwrite: String(overwrite) });
-  return await sendForJson<Transfer>(`/api/daemons/${registrationId}/upload?${query.toString()}`, {
-    method: "POST",
-    rawBody: content,
-  });
+    const query = new URLSearchParams({ path, overwrite: String(overwrite) });
+    return await sendForJson<Transfer>(`/api/daemons/${registrationId}/upload?${query.toString()}`, {
+        method: "POST",
+        rawBody: content,
+    });
 }
 
 /**
@@ -51,37 +51,37 @@ export async function uploadFile(
  * than a download followed by an upload.
  */
 export async function copyBetweenMachines(
-  sourceRegistrationId: string,
-  targetRegistrationId: string,
-  sourcePath: string,
-  targetPath: string,
-  overwrite = false,
+    sourceRegistrationId: string,
+    targetRegistrationId: string,
+    sourcePath: string,
+    targetPath: string,
+    overwrite = false,
 ): Promise<Transfer> {
-  const query = new URLSearchParams({
-    sourcePath,
-    targetPath,
-    overwrite: String(overwrite),
-  });
-  return await sendForJson<Transfer>(
-    `/api/daemons/${sourceRegistrationId}/copy-to/${targetRegistrationId}?${query.toString()}`,
-    { method: "POST" },
-  );
+    const query = new URLSearchParams({
+        sourcePath,
+        targetPath,
+        overwrite: String(overwrite),
+    });
+    return await sendForJson<Transfer>(
+        `/api/daemons/${sourceRegistrationId}/copy-to/${targetRegistrationId}?${query.toString()}`,
+        { method: "POST" },
+    );
 }
 
 function fileNameFrom(contentDisposition: string | null): string | null {
-  if (contentDisposition === null) {
-    return null;
-  }
+    if (contentDisposition === null) {
+        return null;
+    }
 
-  // filename*=UTF-8''... (RFC 5987, preferred) or a plain quoted filename=...
-  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(contentDisposition);
-  if (encoded?.[1] !== undefined) {
-    return decodeURIComponent(encoded[1]);
-  }
+    // filename*=UTF-8''... (RFC 5987, preferred) or a plain quoted filename=...
+    const encoded = /filename\*=UTF-8''([^;]+)/i.exec(contentDisposition);
+    if (encoded?.[1] !== undefined) {
+        return decodeURIComponent(encoded[1]);
+    }
 
-  return /filename="?([^";]+)"?/i.exec(contentDisposition)?.[1] ?? null;
+    return /filename="?([^";]+)"?/i.exec(contentDisposition)?.[1] ?? null;
 }
 
 function baseNameOf(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+    return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
 }

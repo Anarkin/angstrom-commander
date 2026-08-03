@@ -16,8 +16,14 @@ indent_size = 2
 [*.{props,targets,config,nuspec}]
 indent_size = 2
 
-[*.{js,jsx}]
-indent_size = 2
+# 4 to match the rest of the repo (overriding Prettier's 2-space ecosystem default;
+# tabWidth in the WebClient's .prettierrc.json is the enforcing twin of this line)
+[*.{js,jsx,ts,tsx}]
+indent_size = 4
+
+# The WebClient's non-TS files are Prettier-formatted too, so they follow its 4
+[src/WebClient/**.{json,css,html}]
+indent_size = 4
 
 [*.json]
 indent_size = 2

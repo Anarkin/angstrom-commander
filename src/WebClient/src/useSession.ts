@@ -8,32 +8,32 @@ import { ApiError, loadStoredAccessToken } from "./serverApi/http";
  * instead of leaving the user staring at errors.
  */
 export function useSession() {
-  const [signedIn, setSignedIn] = useState(() => loadStoredAccessToken() !== null);
+    const [signedIn, setSignedIn] = useState(() => loadStoredAccessToken() !== null);
 
-  const signIn = useCallback(() => {
-    setSignedIn(true);
-  }, []);
+    const signIn = useCallback(() => {
+        setSignedIn(true);
+    }, []);
 
-  const signOut = useCallback(() => {
-    clearSession();
-    setSignedIn(false);
-  }, []);
+    const signOut = useCallback(() => {
+        clearSession();
+        setSignedIn(false);
+    }, []);
 
-  /** Returns a message to show; ends the session first when the token is no longer good. */
-  const handleFailure = useCallback(
-    (error: unknown): string => {
-      if (error instanceof ApiError) {
-        if (error.isUnauthorized) {
-          signOut();
-        }
+    /** Returns a message to show; ends the session first when the token is no longer good. */
+    const handleFailure = useCallback(
+        (error: unknown): string => {
+            if (error instanceof ApiError) {
+                if (error.isUnauthorized) {
+                    signOut();
+                }
 
-        return error.message;
-      }
+                return error.message;
+            }
 
-      return error instanceof Error ? error.message : "Something went wrong.";
-    },
-    [signOut],
-  );
+            return error instanceof Error ? error.message : "Something went wrong.";
+        },
+        [signOut],
+    );
 
-  return { signedIn, signIn, signOut, handleFailure };
+    return { signedIn, signIn, signOut, handleFailure };
 }

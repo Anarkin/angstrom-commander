@@ -20,9 +20,9 @@ export type ValidationProblemDetails = Schemas["HttpValidationProblemDetails"];
  * so normalize once here instead of at every call site.
  */
 export function sizeInBytes(entry: DirectoryEntry): number | null {
-  if (entry.sizeBytes === null || entry.sizeBytes === undefined) {
-    return null;
-  }
+    if (entry.sizeBytes === null || entry.sizeBytes === undefined) {
+        return null;
+    }
 
-  return typeof entry.sizeBytes === "string" ? Number(entry.sizeBytes) : entry.sizeBytes;
+    return typeof entry.sizeBytes === "string" ? Number(entry.sizeBytes) : entry.sizeBytes;
 }

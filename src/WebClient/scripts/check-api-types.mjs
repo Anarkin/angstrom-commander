@@ -18,20 +18,20 @@ const tempDirectory = mkdtempSync(join(tmpdir(), "api-types-"));
 const generatedFile = join(tempDirectory, "generated.d.ts");
 
 try {
-  // `npm run` puts node_modules/.bin on PATH, so the binary resolves cross-platform;
-  // shell: true lets Windows find the .cmd shim.
-  execFileSync("openapi-typescript", [SPEC, "-o", generatedFile], {
-    stdio: "inherit",
-    shell: true,
-  });
+    // `npm run` puts node_modules/.bin on PATH, so the binary resolves cross-platform;
+    // shell: true lets Windows find the .cmd shim.
+    execFileSync("openapi-typescript", [SPEC, "-o", generatedFile], {
+        stdio: "inherit",
+        shell: true,
+    });
 
-  const normalize = (path) => readFileSync(path, "utf8").replaceAll("\r\n", "\n");
-  if (normalize(generatedFile) !== normalize(COMMITTED)) {
-    console.error(`\n${COMMITTED} is out of date with ${SPEC}. Run: npm run gen:api`);
-    process.exit(1);
-  }
+    const normalize = (path) => readFileSync(path, "utf8").replaceAll("\r\n", "\n");
+    if (normalize(generatedFile) !== normalize(COMMITTED)) {
+        console.error(`\n${COMMITTED} is out of date with ${SPEC}. Run: npm run gen:api`);
+        process.exit(1);
+    }
 
-  console.log(`${COMMITTED} is in sync with the OpenAPI contract`);
+    console.log(`${COMMITTED} is in sync with the OpenAPI contract`);
 } finally {
-  rmSync(tempDirectory, { recursive: true, force: true });
+    rmSync(tempDirectory, { recursive: true, force: true });
 }
