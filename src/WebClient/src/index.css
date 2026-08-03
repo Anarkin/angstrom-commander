@@ -99,6 +99,14 @@ select {
     color: inherit;
 }
 
+/* The dropdown popup paints its own surface: with the select transparent, dark mode
+   can pair a light popup with the page's light text — white on white. Canvas and
+   CanvasText are the system pair that always match the active color scheme. */
+option {
+    background-color: Canvas;
+    color: CanvasText;
+}
+
 button {
     cursor: pointer;
 }
