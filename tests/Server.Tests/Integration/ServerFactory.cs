@@ -28,6 +28,12 @@ internal sealed class ServerFactory(string connectionString) : WebApplicationFac
     /// <summary>Per-user daily relay quota in bytes; null keeps the appsettings default.</summary>
     public long? DailyBytesPerUser { get; init; }
 
+    /// <summary>
+    /// Open by default so the suite can mint accounts freely whatever environment it boots;
+    /// the test about the switch itself closes it.
+    /// </summary>
+    public bool RegistrationEnabled { get; init; } = true;
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         if (this.Environment is not null)
@@ -47,6 +53,8 @@ internal sealed class ServerFactory(string connectionString) : WebApplicationFac
             builder.UseSetting(
                 "TransferLimits:DailyBytesPerUser", dailyBytes.ToString(CultureInfo.InvariantCulture));
         }
+
+        builder.UseSetting("Registration:Enabled", this.RegistrationEnabled ? "true" : "false");
 
         for (var index = 0; index < this.AllowedOrigins.Count; index++)
         {

@@ -36,6 +36,30 @@ public sealed class SignInProtectionTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task AClosedEnvironmentRefusesNewAccountsButServesExistingOnes()
+    {
+        using var openFactory = new ServerFactory(postgres.ConnectionString);
+        using (var openClient = openFactory.CreateClient())
+        {
+            await RegisterAsync(openClient, "grandfathered@example.com");
+        }
+
+        // The same database, registration now closed — the standing-environment posture.
+        using var closedFactory = new ServerFactory(postgres.ConnectionString) { RegistrationEnabled = false };
+        using var client = closedFactory.CreateClient();
+
+        using var refused = await client.PostAsJsonAsync(
+            "/api/auth/register", new { email = "newcomer@example.com", password = Password });
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Contains(
+            "Registration is closed", await refused.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+
+        // Closing the door to newcomers must not lock out the people already inside.
+        using var login = await LoginAsync(client, "grandfathered@example.com", Password);
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+    }
+
+    [Fact]
     public async Task UnknownAccountAndWrongPasswordAnswerAlike()
     {
         using var factory = new ServerFactory(postgres.ConnectionString);

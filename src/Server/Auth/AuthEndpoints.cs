@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using AngstromCommander.Server.Data;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Options;
 
 namespace AngstromCommander.Server.Auth;
 
@@ -11,10 +12,18 @@ internal static class AuthEndpoints
     {
         app.MapPost(
             "/api/auth/register",
-            static async Task<Results<Ok<RegisterResponse>, ValidationProblem>> (
+            static async Task<Results<Ok<RegisterResponse>, ValidationProblem, ProblemHttpResult>> (
                 RegisterRequest request,
-                UserManager<AppUser> users) =>
+                UserManager<AppUser> users,
+                IOptions<RegistrationOptions> registration) =>
             {
+                if (!registration.Value.Enabled)
+                {
+                    return TypedResults.Problem(
+                        detail: "Registration is closed on this server.",
+                        statusCode: StatusCodes.Status403Forbidden);
+                }
+
                 var user = new AppUser { UserName = request.Email, Email = request.Email };
                 var result = await users.CreateAsync(user, request.Password);
                 if (!result.Succeeded)
@@ -27,6 +36,7 @@ internal static class AuthEndpoints
 
                 return TypedResults.Ok(new RegisterResponse(user.Id));
             })
+            .ProducesProblem(StatusCodes.Status403Forbidden)
             .ValidatesRequest<RegisterRequest>()
             .RequireRateLimiting(RateLimitPolicies.Authentication);
 
