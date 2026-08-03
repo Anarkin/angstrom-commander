@@ -13,6 +13,8 @@ export type RegisterResponse = Schemas["RegisterResponse"];
 export type ClaimResponse = Schemas["ClaimResponse"];
 export type Transfer = Schemas["TransferResponse"];
 export type TransferUsage = Schemas["TransferUsageResponse"];
+export type PatCreated = Schemas["PatCreatedResponse"];
+export type Pat = Schemas["PatResponse"];
 export type ProblemDetails = Schemas["ProblemDetails"];
 export type ValidationProblemDetails = Schemas["HttpValidationProblemDetails"];
 

@@ -1,5 +1,5 @@
 import { send, sendForJson, setAccessToken } from "./http";
-import type { ClaimResponse, LoginResponse, RegisterResponse } from "./types";
+import type { ClaimResponse, LoginResponse, Pat, PatCreated, RegisterResponse } from "./types";
 
 export async function register(email: string, password: string): Promise<RegisterResponse> {
     return await sendForJson<RegisterResponse>("/api/auth/register", {
@@ -35,6 +35,19 @@ export async function claimPairingCode(code: string, displayName: string): Promi
 /** Unpairs a machine; it needs a fresh pairing code to ever come back. */
 export async function unpairMachine(registrationId: string): Promise<void> {
     await send(`/api/daemons/${registrationId}`, { method: "DELETE" });
+}
+
+/** Mints a personal access token — the response is the ONLY time its value exists. */
+export async function createPat(name: string): Promise<PatCreated> {
+    return await sendForJson<PatCreated>("/api/pats", { method: "POST", body: { name } });
+}
+
+export async function listPats(): Promise<Pat[]> {
+    return await sendForJson<Pat[]>("/api/pats");
+}
+
+export async function revokePat(id: string): Promise<void> {
+    await send(`/api/pats/${id}`, { method: "DELETE" });
 }
 
 export { send };

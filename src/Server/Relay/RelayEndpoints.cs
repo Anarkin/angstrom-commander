@@ -21,28 +21,9 @@ internal static class RelayEndpoints
             "/api/daemons",
             static async Task<Ok<IReadOnlyList<MachineResponse>>> (
                 HttpContext http,
-                AppDbContext db,
-                IDaemonConnectionRegistry registry,
+                DaemonRelayOperations operations,
                 CancellationToken cancellationToken) =>
-            {
-                var userId = GetUserId(http);
-                var registrations = await db.DaemonRegistrations.AsNoTracking()
-                    .Where(r => r.UserId == userId && r.RevokedAt == null)
-                    .OrderBy(static r => r.CreatedAt)
-                    .ToListAsync(cancellationToken);
-
-                IReadOnlyList<MachineResponse> machines = registrations
-                    .Select(r => new MachineResponse(
-                        r.Id,
-                        r.DisplayName,
-                        r.Platform,
-                        r.CreatedAt,
-                        r.LastSeenAt,
-                        Online: registry.TryGetConnection(r.Id.ToString(), out _)))
-                    .ToList();
-
-                return TypedResults.Ok(machines);
-            })
+                TypedResults.Ok(await operations.ListMachinesAsync(GetUserId(http), cancellationToken)))
             .RequireAuthorization(AuthPolicies.User);
 
         // How much of the daily relay allowance this user has spent — for the WebClient's
@@ -113,35 +94,13 @@ internal static class RelayEndpoints
             static async Task<Results<Ok<IReadOnlyList<SharedRoot>>, ProblemHttpResult>> (
                 Guid registrationId,
                 HttpContext http,
-                AppDbContext db,
-                IDaemonConnectionRegistry registry,
-                IHubContext<DaemonHub> hub,
+                DaemonRelayOperations operations,
                 CancellationToken cancellationToken) =>
             {
-                if (!await OwnsMachineAsync(db, http, registrationId, cancellationToken))
-                {
-                    return NoSuchMachine();
-                }
-
-                if (!registry.TryGetConnection(registrationId.ToString(), out var connectionId))
-                {
-                    return MachineOffline();
-                }
-
-                ListRootsResponse response;
-                try
-                {
-                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    timeout.CancelAfter(OperationTimeout);
-                    response = await hub.Clients.Client(connectionId)
-                        .InvokeAsync<ListRootsResponse>(DaemonHubMethods.ListRoots, timeout.Token);
-                }
-                catch (Exception ex) when (ex is IOException or OperationCanceledException)
-                {
-                    return MachineSilent();
-                }
-
-                return TypedResults.Ok(response.Roots);
+                var result = await operations.ListRootsAsync(GetUserId(http), registrationId, cancellationToken);
+                return MapFailure(result) is ProblemHttpResult problem
+                    ? problem
+                    : TypedResults.Ok(result.Value!);
             })
             .ProducesRelayProblems()
             .RequireAuthorization(AuthPolicies.User);
@@ -152,46 +111,14 @@ internal static class RelayEndpoints
                 Guid registrationId,
                 string path,
                 HttpContext http,
-                AppDbContext db,
-                IDaemonConnectionRegistry registry,
-                IHubContext<DaemonHub> hub,
+                DaemonRelayOperations operations,
                 CancellationToken cancellationToken) =>
             {
-                // Authorize before routing: the registration must belong to the caller.
-                if (!await OwnsMachineAsync(db, http, registrationId, cancellationToken))
-                {
-                    return NoSuchMachine();
-                }
-
-                if (!registry.TryGetConnection(registrationId.ToString(), out var connectionId))
-                {
-                    return MachineOffline();
-                }
-
-                ListDirectoryResponse response;
-                try
-                {
-                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    timeout.CancelAfter(OperationTimeout);
-                    response = await hub.Clients.Client(connectionId)
-                        .InvokeAsync<ListDirectoryResponse>(
-                            DaemonHubMethods.ListDirectory,
-                            new ListDirectoryRequest(path),
-                            timeout.Token);
-                }
-                catch (Exception ex) when (ex is IOException or OperationCanceledException)
-                {
-                    return MachineSilent();
-                }
-
-                if (response.Error is not null || response.Entries is null)
-                {
-                    return TypedResults.Problem(
-                        detail: response.Error ?? "The machine sent no directory listing.",
-                        statusCode: StatusCodes.Status400BadRequest);
-                }
-
-                return TypedResults.Ok(response.Entries);
+                var result = await operations.ListDirectoryAsync(
+                    GetUserId(http), registrationId, path, cancellationToken);
+                return MapFailure(result) is ProblemHttpResult problem
+                    ? problem
+                    : TypedResults.Ok(result.Value!);
             })
             .ProducesRelayProblems()
             .RequireAuthorization(AuthPolicies.User);
@@ -373,34 +300,30 @@ internal static class RelayEndpoints
         // refusal as a 400 the user can read, answer 204 on success.
         app.MapPost(
             "/api/daemons/{registrationId:guid}/mkdir",
-            static (Guid registrationId, string path, HttpContext http, AppDbContext db,
-                    IDaemonConnectionRegistry registry, IHubContext<DaemonHub> hub, CancellationToken ct) =>
-                InvokeMutationAsync(
-                    registrationId, DaemonHubMethods.CreateDirectory, new CreateDirectoryRequest(path),
-                    http, db, registry, hub, ct))
+            static async Task<Results<NoContent, ProblemHttpResult>> (
+                Guid registrationId, string path, HttpContext http,
+                DaemonRelayOperations operations, CancellationToken ct) =>
+                MapMutation(await operations.CreateDirectoryAsync(GetUserId(http), registrationId, path, ct)))
             .ProducesRelayProblems()
             .RequireAuthorization(AuthPolicies.User);
 
         // Rename is a move with the same parent; the WebClient's Rename button calls this.
         app.MapPost(
             "/api/daemons/{registrationId:guid}/move",
-            static (Guid registrationId, string sourcePath, string targetPath, bool? overwrite,
-                    HttpContext http, AppDbContext db,
-                    IDaemonConnectionRegistry registry, IHubContext<DaemonHub> hub, CancellationToken ct) =>
-                InvokeMutationAsync(
-                    registrationId, DaemonHubMethods.MoveEntry,
-                    new MoveEntryRequest(sourcePath, targetPath, overwrite ?? false),
-                    http, db, registry, hub, ct))
+            static async Task<Results<NoContent, ProblemHttpResult>> (
+                Guid registrationId, string sourcePath, string targetPath, bool? overwrite, HttpContext http,
+                DaemonRelayOperations operations, CancellationToken ct) =>
+                MapMutation(await operations.MoveEntryAsync(
+                    GetUserId(http), registrationId, sourcePath, targetPath, overwrite ?? false, ct)))
             .ProducesRelayProblems()
             .RequireAuthorization(AuthPolicies.User);
 
         app.MapDelete(
             "/api/daemons/{registrationId:guid}/entries",
-            static (Guid registrationId, string path, HttpContext http, AppDbContext db,
-                    IDaemonConnectionRegistry registry, IHubContext<DaemonHub> hub, CancellationToken ct) =>
-                InvokeMutationAsync(
-                    registrationId, DaemonHubMethods.DeleteEntry, new DeleteEntryRequest(path),
-                    http, db, registry, hub, ct))
+            static async Task<Results<NoContent, ProblemHttpResult>> (
+                Guid registrationId, string path, HttpContext http,
+                DaemonRelayOperations operations, CancellationToken ct) =>
+                MapMutation(await operations.DeleteEntryAsync(GetUserId(http), registrationId, path, ct)))
             .ProducesRelayProblems()
             .RequireAuthorization(AuthPolicies.User);
 
@@ -499,45 +422,23 @@ internal static class RelayEndpoints
         return app;
     }
 
-    private static async Task<Results<NoContent, ProblemHttpResult>> InvokeMutationAsync<TRequest>(
-        Guid registrationId,
-        string method,
-        TRequest request,
-        HttpContext http,
-        AppDbContext db,
-        IDaemonConnectionRegistry registry,
-        IHubContext<DaemonHub> hub,
-        CancellationToken cancellationToken)
+    /// <summary>The REST spelling of a relay failure; null when the operation succeeded.</summary>
+    private static ProblemHttpResult? MapFailure<T>(RelayResult<T> result)
     {
-        if (!await OwnsMachineAsync(db, http, registrationId, cancellationToken))
+        return result.Failure switch
         {
-            return NoSuchMachine();
-        }
+            RelayFailure.None => null,
+            RelayFailure.NoSuchMachine => NoSuchMachine(),
+            RelayFailure.MachineOffline => MachineOffline(),
+            RelayFailure.MachineSilent => MachineSilent(),
+            _ => TypedResults.Problem(
+                detail: result.RefusalDetail, statusCode: StatusCodes.Status400BadRequest),
+        };
+    }
 
-        if (!registry.TryGetConnection(registrationId.ToString(), out var connectionId))
-        {
-            return MachineOffline();
-        }
-
-        FileOperationResponse response;
-        try
-        {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(OperationTimeout);
-            response = await hub.Clients.Client(connectionId)
-                .InvokeAsync<FileOperationResponse>(method, request, timeout.Token);
-        }
-        catch (Exception ex) when (ex is IOException or OperationCanceledException)
-        {
-            return MachineSilent();
-        }
-
-        if (response.Error is not null)
-        {
-            return TypedResults.Problem(detail: response.Error, statusCode: StatusCodes.Status400BadRequest);
-        }
-
-        return TypedResults.NoContent();
+    private static Results<NoContent, ProblemHttpResult> MapMutation(RelayResult<bool> result)
+    {
+        return MapFailure(result) is ProblemHttpResult problem ? problem : TypedResults.NoContent();
     }
 
     private static async Task<long> PumpRequestBodyAsync(

@@ -60,6 +60,12 @@ progress {
     letter-spacing: normal;
 }
 
+code.token {
+    font-family: ui-monospace, Consolas, monospace;
+    user-select: all;
+    word-break: break-all;
+}
+
 .sign-in form {
     display: flex;
     flex-direction: column;

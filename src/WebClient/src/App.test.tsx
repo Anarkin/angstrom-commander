@@ -43,7 +43,14 @@ function stubApi(overrides: Record<string, unknown> = {}) {
         const url = input instanceof URL ? input : new URL(input);
         calls.push({ method: init?.method ?? "GET", url: url.pathname + url.search });
 
-        const match = Object.entries(overrides).find(([key]) => (url.pathname + url.search).includes(key));
+        // A key may pin the method ("POST /api/pats") or match any ("/api/pats").
+        const requestMethod = init?.method ?? "GET";
+        const match = Object.entries(overrides).find(([key]) => {
+            const [methodPart, pathPart] = key.includes(" ") ? (key.split(" ", 2) as [string, string]) : [null, key];
+            return (
+                (methodPart === null || methodPart === requestMethod) && (url.pathname + url.search).includes(pathPart)
+            );
+        });
         const body =
             match?.[1] ??
             (url.pathname === "/api/daemons"
@@ -298,6 +305,51 @@ test("unpairing a machine asks first, then deletes and refreshes the list", asyn
     expect(deleteCall?.url).toBe(`/api/daemons/${homeMachine.registrationId}`);
     // The list refreshes so the machine disappears.
     expect(calls.filter((call) => call.method === "GET" && call.url === "/api/daemons").length).toBeGreaterThan(1);
+});
+
+test("creating an access token shows its value exactly once", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    const calls = stubApi({
+        "POST /api/pats": {
+            id: "pat-1",
+            name: "Claude Code",
+            token: "acpat_SHOWN_ONCE",
+            createdAt: "2026-08-04T10:00:00Z",
+        },
+        "GET /api/pats": [{ id: "pat-1", name: "Claude Code", createdAt: "2026-08-04T10:00:00Z", lastUsedAt: null }],
+    });
+    vi.spyOn(window, "prompt").mockReturnValue("Claude Code");
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /settings/i }));
+    await user.click(await screen.findByRole("button", { name: /create token/i }));
+
+    expect(await screen.findByText("acpat_SHOWN_ONCE")).toBeInTheDocument();
+    expect(screen.getByText(/never be shown again/i)).toBeInTheDocument();
+    expect(screen.getByText(/never used/i)).toBeInTheDocument();
+    const createCall = calls.find((call) => call.method === "POST" && call.url === "/api/pats");
+    expect(createCall).toBeDefined();
+});
+
+test("revoking an access token asks first and deletes it", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    const calls = stubApi({
+        "GET /api/pats": [
+            { id: "pat-9", name: "Old laptop", createdAt: "2026-07-01T10:00:00Z", lastUsedAt: "2026-08-01T10:00:00Z" },
+        ],
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /settings/i }));
+    await user.click(await screen.findByRole("button", { name: /revoke/i }));
+
+    expect(await screen.findByText(/revoked old laptop/i)).toBeInTheDocument();
+    expect(confirm).toHaveBeenCalled();
+    const revokeCall = calls.find((call) => call.method === "DELETE" && call.url === "/api/pats/pat-9");
+    expect(revokeCall).toBeDefined();
 });
 
 test("settings shows the daily transfer allowance with the relay-only note", async () => {

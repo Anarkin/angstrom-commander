@@ -51,6 +51,14 @@ builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
     policy.AllowAnyHeader().AllowAnyMethod().WithExposedHeaders("Content-Disposition");
 }));
 builder.Services.AddSingleton<IDaemonConnectionRegistry, InMemoryDaemonConnectionRegistry>();
+builder.Services.AddScoped<DaemonRelayOperations>();
+builder.Services.AddHttpContextAccessor();
+
+// The MCP endpoint: the same file-op surface as REST, spoken over Streamable HTTP for
+// AI clients. Stateless — every request self-contained, nothing per-session in memory.
+builder.Services.AddMcpServer()
+    .WithHttpTransport(static options => options.Stateless = true)
+    .WithTools<AngstromCommander.Server.Mcp.FileTools>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.Configure<TransferLimitOptions>(builder.Configuration.GetSection(TransferLimitOptions.SectionName));
 builder.Services.AddSingleton<FileTransferRegistry>();
@@ -81,7 +89,19 @@ builder.Services.Configure<RegistrationOptions>(builder.Configuration.GetSection
 builder.Services.AddSingleton<TokenService>();
 
 var authOptions = builder.Configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>() ?? new AuthOptions();
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+
+// Two credential families share the Authorization header: JWTs (users, Daemons) and
+// personal access tokens. The router picks the scheme by the PAT prefix, so each
+// handler only ever sees its own kind.
+builder.Services.AddAuthentication("TokenRouter")
+    .AddPolicyScheme("TokenRouter", "JWT or PAT", static options =>
+        options.ForwardDefaultSelector = static context =>
+            context.Request.Headers.Authorization.ToString()
+                .StartsWith($"Bearer {PersonalAccessTokens.Prefix}", StringComparison.Ordinal)
+                ? PatAuthenticationHandler.SchemeName
+                : JwtBearerDefaults.AuthenticationScheme)
+    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, PatAuthenticationHandler>(
+        PatAuthenticationHandler.SchemeName, displayName: null, configureOptions: null)
     .AddJwtBearer(options =>
     {
         options.MapInboundClaims = false;
@@ -111,7 +131,11 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy(AuthPolicies.User, static policy => policy.RequireClaim(AuthClaims.TokenType, AuthClaims.UserTokenType))
-    .AddPolicy(AuthPolicies.Daemon, static policy => policy.RequireClaim(AuthClaims.TokenType, AuthClaims.DaemonTokenType));
+    .AddPolicy(AuthPolicies.Daemon, static policy => policy.RequireClaim(AuthClaims.TokenType, AuthClaims.DaemonTokenType))
+    .AddPolicy(AuthPolicies.Mcp, static policy => policy
+        .AddAuthenticationSchemes(PatAuthenticationHandler.SchemeName)
+        .RequireClaim(AuthClaims.TokenType, AuthClaims.PatTokenType)
+        .RequireClaim(AuthClaims.Scopes, PersonalAccessTokens.FilesScope));
 
 // Fresh environments self-initialize their schema (ARCHITECTURE.md § Tech stack).
 builder.Services.AddHostedService<DatabaseMigrator>();
@@ -137,7 +161,9 @@ app.MapHub<DaemonHub>("/hub/daemon");
 app.MapAuthEndpoints();
 app.MapEnrollmentEndpoints();
 app.MapDaemonAuthEndpoints();
+app.MapPatEndpoints();
 app.MapRelayEndpoints();
+app.MapMcp("/mcp").RequireAuthorization(AuthPolicies.Mcp);
 
 await app.RunAsync();
 

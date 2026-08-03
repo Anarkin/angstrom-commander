@@ -159,6 +159,41 @@ Authorization: Bearer {{token}}
 DELETE {{server}}/api/daemons/{{registrationId}}
 Authorization: Bearer {{token}}
 
+### 10. Personal access tokens — what MCP clients hold. The value appears ONCE, here.
+# @name createPat
+POST {{server}}/api/pats
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "name": "Server.http experiment" }
+
+###
+@pat = {{createPat.response.body.$.token}}
+
+### The tokens, listed (values withheld — only hashes exist anymore)
+GET {{server}}/api/pats
+Authorization: Bearer {{token}}
+
+### 11. The MCP endpoint speaks JSON-RPC over Streamable HTTP; a PAT is its only key
+POST {{server}}/mcp
+Authorization: Bearer {{pat}}
+Accept: application/json, text/event-stream
+Content-Type: application/json
+
+{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
+
+### Call a tool — the same relay, sandbox and quotas as every other client
+POST {{server}}/mcp
+Authorization: Bearer {{pat}}
+Accept: application/json, text/event-stream
+Content-Type: application/json
+
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_machines","arguments":{}}}
+
+### A PAT is not a REST credential (and a user JWT is not an MCP one) → 403
+GET {{server}}/api/daemons
+Authorization: Bearer {{pat}}
+
 # Not included: /api/enrollment/code, /api/enrollment/status and /api/daemon-auth/* —
 # those are called by the Daemon itself (the token one needs an ECDsa signature you
 # can't produce in an .http file). Watch them happen in: docker compose logs daemon

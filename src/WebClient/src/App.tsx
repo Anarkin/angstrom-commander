@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { FilePane } from "./FilePane";
 import type { PaneState } from "./FilePane";
+import { AccessTokens } from "./AccessTokens";
 import { MachinesPanel } from "./MachinesPanel";
 import { SignInScreen } from "./SignInScreen";
 import { TransferAllowance } from "./TransferAllowance";
@@ -110,6 +111,7 @@ function App() {
             {view === "settings" && (
                 <>
                     <MachinesPanel machines={machines} onRefresh={refreshMachines} onFailure={handleFailure} />
+                    <AccessTokens onFailure={handleFailure} />
                     <TransferAllowance onFailure={handleFailure} />
                 </>
             )}

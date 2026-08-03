@@ -115,7 +115,9 @@ Where the code actually is, as of July 2026 — a living list, so update it when
 - Merges to main deploy themselves: after the CI gates pass, a workflow provisions + deploys the test stamp under a federated (secretless) identity — what is live on test is main, as of its last green push
 - Registration is a switch, closed by default (`Registration:Enabled` — Development opts in, a stamp flips the env var without a deploy, closed answers 403 with a readable detail): standing environments are private until deliberately opened, existing accounts unaffected
 
-**Next, in order:** MCP endpoint with PATs → OAuth + consent → Agent + model picker.
+- The MCP endpoint is live: `/mcp` (Streamable HTTP, stateless) exposes list_machines, list_roots, list_directory, create_directory, move_entry and delete_entry — thin adapters over the same `DaemonRelayOperations` the REST endpoints call, per the protocol-adapter rule. Personal access tokens are its only key: minted/listed/revoked in Settings, stored hash-only in the new sessions table, scoped, refused everywhere except `/mcp` (and user JWTs refused there). Byte-carrying tools (download/upload content) are deliberately absent — bytes do not belong base64-packed in JSON-RPC
+
+**Next, in order:** OAuth + consent → Agent + model picker.
 
 **Known gaps, all deliberate:**
 
@@ -123,7 +125,7 @@ Where the code actually is, as of July 2026 — a living list, so update it when
 
 - Per-PR demo stamps are not wired yet (the pull-request federated credential already exists, so it is workflow work, not identity work). And the deploy pipeline knows only test: when prod exists, it must get an approval gate, never the same auto-deploy
 - Binding a stamp's `api.` managed TLS certificate is a one-time manual step after first provision (`az containerapp hostname bind`, see infra/README.md): the azurerm provider cannot create Container Apps managed certificates, so Terraform creates the unbound domain and thereafter ignores the binding
-- Sessions are stateless JWTs only: no sessions table, no refresh tokens, and no "active sessions" page (machine unpair exists; *session* revocation does not)
+- User sign-ins are still stateless JWTs: no refresh tokens, so a sign-in is revocable only by expiry (8 h). The sessions table now exists (PATs live in it, listed and revocable in Settings); wiring sign-ins into it is what remains of the "active sessions" page
 - The Server is single-replica by design for now (`maxReplicas: 1` in the stamp). The full inventory of per-replica state that moves to Redis together when that changes: the Daemon socket registry (already behind `IDaemonConnectionRegistry`), per-user transfer slots, and per-user daily usage counters — plus the piece that is real engineering rather than a swap: request forwarding between replicas ("requests follow the socket", § Architecture). Deliberately staying per-replica even then: the bandwidth token bucket (one transfer's bytes flow through one replica, and a shared bucket would put a Redis round trip in the hottest loop)
 - Rate limiting buckets callers by remote address, and the Server trusts `X-Forwarded-For` from any proxy because Container Apps' ingress address is not known ahead of time. That is only sound while the ingress is the sole route in — put the Server anywhere reachable directly and a caller can forge their own bucket
 - Downloads buffer into a browser Blob — fine for documents, wrong for very large files; the fix is a short-lived download ticket in the URL so the browser streams to disk
@@ -363,6 +365,24 @@ sequenceDiagram
   S-->>A: Connection JWT - registrationId claim, token_type daemon, exp now + 10 min
   A->>S: Open the SignalR socket bearing that token
   Note over A,S: A leaked DB exposes only public keys - nobody can sign the next nonce.<br/>Tokens re-earned per connect are why revocation bites within minutes despite stateless JWTs.
+```
+
+### MCP with a personal access token — how an AI client operates a machine
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant M as MCP client (Claude Code etc.)
+  participant S as Server
+  participant A as Daemon
+  Note over M,S: Once - the user mints a PAT in Settings (value shown a single time)<br/>and pastes it into the client's config
+  M->>S: POST /mcp tools/call list_directory (Authorization Bearer acpat_...)
+  S->>S: SHA-256 the token, find the live session row - that user, those scopes
+  S->>S: Same authorization as REST - does this user own that machine?
+  S->>A: Relay the op over the machine's open socket (sandbox as always)
+  A-->>S: Entries
+  S-->>M: JSON-RPC result
+  Note over M,S: One implementation under REST and MCP alike (DaemonRelayOperations) -<br/>the endpoint is a protocol adapter. Revoking the PAT closes this door instantly.
 ```
 
 ### MCP authorization — OAuth 2.1 consent flow (planned, per § Architecture)
