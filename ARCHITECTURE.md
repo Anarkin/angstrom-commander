@@ -312,6 +312,47 @@ sequenceDiagram
   Note over A,S: The Daemon asks, because nothing can connect to it yet.<br/>Future connects authenticate by signing a challenge with the private key.
 ```
 
+### Daemon connection auth — proving the keypair, every connect
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant A as Daemon
+  participant S as Server
+  A->>S: POST /api/daemon-auth/challenge with registrationId
+  S->>S: Registration exists and not revoked?
+  S-->>A: Fresh random nonce (2 minute lifetime)
+  A->>A: Sign the nonce with the private key that never left this machine
+  A->>S: POST /api/daemon-auth/token with the signature
+  S->>S: Verify against the STORED PUBLIC key
+  S-->>A: Short-lived connection JWT (claims say daemon, not user)
+  A->>S: Open the SignalR socket bearing that token
+  Note over A,S: A leaked DB exposes only public keys - nobody can sign the next nonce.<br/>Short-lived tokens re-earned per connect are why revocation bites despite stateless JWTs.
+```
+
+### MCP authorization — OAuth 2.1 consent flow (planned, per § Architecture)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant M as MCP client (Claude Code etc.)
+  participant B as User's browser
+  participant S as Server (OpenIddict)
+  M->>S: Dynamic client registration - redirect URIs
+  M->>M: Invent PKCE secret, send its hash with the authorize URL
+  M->>B: Open authorize URL
+  B->>S: GET /authorize
+  S->>B: Login if needed, then consent - "this tool wants to operate your machines"
+  B->>S: User approves
+  S-->>B: Redirect with one-time authorization code
+  B-->>M: Code lands at the client's redirect URI
+  M->>S: POST /token with code + PKCE secret revealed
+  S->>S: Hash matches and code unspent?
+  S-->>M: User-scoped access token + refresh token
+  M->>S: MCP tools/call with Bearer token - same authorization and sandbox as any client
+  Note over M,S: The consent screen is the point - the user delegates, scoped and revocable,<br/>and the tool never sees a password. PATs are the copy-paste shortcut through the same door.
+```
+
 ### AI assistant flow — "organize this folder"
 
 ```mermaid
