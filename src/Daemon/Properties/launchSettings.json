@@ -1,22 +1,27 @@
 {
   "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
-    "http": {
+    "local": {
       "commandName": "Project",
       "dotnetRunMessages": true,
-      "launchBrowser": true,
       "applicationUrl": "http://localhost:5125",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "Relay__ServerUrl": "http://localhost:5080",
+        "Relay__StateDirectory": "state-local",
+        "Relay__AllowedRoots__0__Path": "../..",
+        "Relay__AllowedRoots__0__Writable": "false"
       }
     },
-    "https": {
+    "test": {
       "commandName": "Project",
       "dotnetRunMessages": true,
-      "launchBrowser": true,
-      "applicationUrl": "https://localhost:7178;http://localhost:5125",
+      "applicationUrl": "http://localhost:5126",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "Relay__ServerUrl": "https://api.test.angstrom.adamlengyel.com",
+        "Relay__StateDirectory": "state-test",
+        "Relay__AllowedRoots__0__Path": "../..",
+        "Relay__AllowedRoots__0__Writable": "false"
       }
     }
   }

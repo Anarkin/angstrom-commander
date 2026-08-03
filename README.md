@@ -51,4 +51,10 @@ WebClient on Static Web Apps at `app.<name>.…`, its own managed PostgreSQL), a
 happened, and the one manual TLS step per new stamp are all in
 [infra/README.md](infra/README.md). The `test` environment is live.
 
+To connect this machine's Daemon to an environment: `cd src/Daemon` and
+`dotnet run --launch-profile test` (profiles live in `Properties/launchSettings.json`;
+add one per new environment). Each profile keeps its own identity in `state-<env>/`,
+so pairing survives restarts and environments never share a machine identity — the
+first run against an environment prints a pairing code, every later run just reconnects.
+
 For the WebClient, Node.js 22+: `cd src/WebClient && npm ci && npm run dev` starts the dev server against the compose Server on <http://localhost:5080>; `npm test`, `npm run lint`, `npm run format:check`, and `npm run gen:api:check` mirror the CI gates. The Agent joins the compose setup once it exists; see ARCHITECTURE.md § Dev environment.
