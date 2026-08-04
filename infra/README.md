@@ -104,11 +104,18 @@ them; revision deactivation is the same thing — zero replicas, zero compute bi
 Daemons reconnect on their own after a resume (their retry loop never gives up, by
 design).
 
-Two caveats:
+Three caveats:
 
 - **Azure auto-restarts a stopped PostgreSQL Flexible Server after 7 days** — its
   compute quietly starts billing again unless re-stopped. The Container App stays
   stopped indefinitely.
+- **A paused stamp fails its auto-deploy** (observed August 2026): pushing to main
+  still triggers the deploy workflow, and `azd provision` dies at `terraform plan` —
+  the state refresh cannot read the database on a stopped PostgreSQL
+  (`ServerStoppedError`). The failure is harmless and changes nothing — it happens
+  before Terraform plans anything, so the stamp stays paused — but expect the
+  red-X email per push until resume. After resuming, re-run the failed workflow
+  (or just push again) to bring test back level with main.
 - Stopping is for weeks, `azd down` is for months: tearing the stamp down costs
   nothing at all, but loses the environment's data and needs the certificate bind
   and pairing redone on the way back up.
