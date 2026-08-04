@@ -5,7 +5,7 @@ The what and why of the system: domain, components, tech stack, guardrails, secu
 ## Domain
 
 - Dual-pane file manager (Total Commander clone)
-- Parsec-like model: a Daemon runs on each of the user's machines; one user account manages multiple machines from WebClient or MobileClient
+- Parsec-like model: a Daemon runs on each of the user's machines; one user account manages multiple machines from WebClient, MobileClient, or any MCP client the user connects
 - Cloud-based from day one — no VPN/LAN-only setup, no port forwarding expected from users
 - AI-operable from day one: natural-language file tasks via the built-in assistant (Agent), or via any MCP client the user brings (Claude Code etc.)
 
@@ -88,14 +88,14 @@ Diagrams: see the Diagrams section at the bottom.
 - Feature: user asks in natural language ("organize my Downloads by file type") in the WebClient/MobileClient chat pane and an LLM performs the file operations; a curated model picker chooses the LLM
 - LLM: **Foundry Models** (Azure's model-as-a-service) — serverless pay-per-token inference, one endpoint fronting many models (Claude, GPT, …), so the model is a request parameter; resource lives in the environment's stamp
 - Loop: the **Agent** (container on Foundry Agent Service) runs the tool-calling loop — model emits tool calls, the Agent executes them **as an MCP client of the Server's MCP endpoint** with a user-scoped token, feeds results back until the model finishes. The Agent is architecturally just another client: no privileged path, Daemon unchanged
-- Safety: Daemon path sandboxing bounds the AI exactly like any client; destructive/mutating ops require user confirmation in the client before execution; no delete tool in v1; built-in usage burns our Azure tokens → per-user usage limits ship with the feature, not after
+- Safety: Daemon path sandboxing bounds the AI exactly like any client; the chat pane requires user confirmation before the Agent executes mutating ops, and the Agent offers the model no delete tool in v1 — the endpoint's `delete_entry` stays available to MCP clients the user drives directly, where that client's own confirmation UX gates it; built-in usage burns our Azure tokens → per-user usage limits ship with the feature, not after
 - Build order inside v1 (each step ships on its own, none is rework): core file manager → MCP endpoint with PATs (third-party agents work from here) → OAuth + consent → Agent + model picker
 - Chat routing: WebClient/MobileClient never talk to the Agent directly — chat goes to the Server (existing JWT auth, single public origin), which forwards the session to the Agent and streams responses/confirmations back over the client's already-open SignalR connection. The Agent's endpoint is never publicly exposed
 - Fallback: the Agent is a plain container speaking MCP — if Foundry Agent Service disappoints (GA'd mid-2026), it runs on Container Apps instead with an infra-only change
 
 ## Implementation status
 
-Where the code actually is, as of July 2026 — a living list, so update it when a row moves.
+Where the code actually is, as of August 2026 — a living list, so update it when a row moves.
 
 **Working end to end** (locally, via `docker compose up`; verified with tests and by hand):
 
@@ -139,26 +139,26 @@ Where the code actually is, as of July 2026 — a living list, so update it when
 
 ## Security model
 
-The model the system is built toward, which includes parts not written yet (MCP auth, refresh tokens, the sessions page). § Implementation status is the source of truth for what exists today.
+The model the system is built toward, which includes parts not written yet (OAuth for MCP clients, refresh tokens, the sessions page). § Implementation status is the source of truth for what exists today.
 
 - TLS everywhere; WebClient and MobileClient authenticate with JWT access tokens, and will carry hashed refresh tokens revocable per device once sessions are stored
 - Registration is closed unless an environment deliberately opens it (`Registration:Enabled`, default false outside Development) — accounts unlock everything the relay can cost, so who gets one is a per-environment decision, not a default
 - Sign-in is guessing-resistant: failed attempts lock the account (ASP.NET Core Identity's counters), wrong password and unknown account answer identically so the endpoint cannot be used to enumerate emails, and every anonymous endpoint — sign-in, registration, enrollment, the Daemon challenge/token exchange — is rate limited per caller
 - No secret has a default: the JWT signing key ships nowhere in the repo (Development reads one from `appsettings.Development.json`, every other environment sets `Auth__JwtSigningKey`), and a Server configured without one refuses to issue or accept a token instead of falling back to something known
-- The two live token types side by side (both HS256 with the stamp's key, verified by one middleware — after the signature check, the `token_type` claim is the only wall between their worlds, enforced by two authorization policies and pinned by a test):
+- The three live credential types side by side. The two JWTs are HS256 with the stamp's key, verified by one middleware — after the signature check, the `token_type` claim is the only wall between their worlds, enforced by authorization policies and pinned by tests. The PAT is not a JWT at all: a random value matched by stored hash, routed to its own handler by the `acpat_` prefix:
 
-  | | User token | Daemon token |
-  | --- | --- | --- |
-  | Earned by | password (+ lockout, rate limit) | signing a fresh nonce |
-  | Lifetime | 8 hours | 10 minutes |
-  | Claims | `sub` = user id, `token_type=user` | `registrationId`, `token_type=daemon` |
-  | Carried in | `Authorization: Bearer` header | query string on the SignalR connect |
-  | Opens | user endpoints (machines, files, unpair) | only the relay hub |
-  | Revocation today | expiry only (refresh tokens planned) | ≤10 min via `RevokedAt` at the challenge |
+  | | User token (JWT) | Daemon token (JWT) | Personal access token |
+  | --- | --- | --- | --- |
+  | Earned by | password (+ lockout, rate limit) | signing a fresh nonce | minted in Settings with a user token (a PAT can never mint or revoke PATs) |
+  | Lifetime | 8 hours | 10 minutes | until revoked |
+  | Claims | `sub` = user id, `token_type=user` | `registrationId`, `token_type=daemon` | none in the token — user and scopes live in its session row |
+  | Carried in | `Authorization: Bearer` header | query string on the SignalR connect | `Authorization: Bearer` header |
+  | Opens | user endpoints (machines, files, unpair) | only the relay hub | only `/mcp` |
+  | Revocation today | expiry only (refresh tokens planned) | ≤10 min via `RevokedAt` at the challenge | instant — every request finds the live session row or fails |
 - Daemon identity = keypair generated at enrollment; the Server stores only the public key (DB leak ≠ Daemon impersonation); revoking a registration kills that machine's access. The sandbox refuses to serve the Daemon's own state directory whatever the roots say, so sharing a folder that contains it cannot hand out the key that is the machine's identity
 - Enrollment: Daemon shows a short-lived one-time pairing code, user enters it in a logged-in WebClient or MobileClient (TV-pairing style)
 - Path sandboxing in the Daemon: canonicalize all client-supplied paths and resolve every symbolic link and junction along them, then enforce allowed roots — canonicalizing alone is lexical, so a link planted inside a shared folder would otherwise read and write outside it. Each root carries a writable flag and read-only is the default, so sharing a folder never implies permission to change it — writes resolve only against writable roots. Mutations (delete, move, mkdir) resolve the parent fully but take the final component as-is: deleting or moving a link acts on the link, never on its target, and a shared root itself can never be deleted or renamed
-- AI access: the Agent and third-party MCP clients act only through the Server's MCP endpoint with user-scoped tokens (OAuth 2.1 or PATs) — same authorization and Daemon sandbox as any client, no extra access path; mutating ops additionally require explicit user confirmation; every AI session is listed and revocable on the "active sessions" page
+- AI access: the Agent and third-party MCP clients act only through the Server's MCP endpoint with user-scoped tokens (OAuth 2.1 or PATs) — same authorization and Daemon sandbox as any client, no extra access path. Confirmation of mutating ops lives where the user is: the built-in Agent's chat pane enforces it, while a third-party client's own UX (e.g. Claude Code's permission prompts) is trusted with it — the Server cannot see another client's screen, so what it enforces are ownership checks, writable-root flags, and instant token revocation; every AI session is listed and revocable on the "active sessions" page
 
 ## Scaling
 
@@ -167,7 +167,16 @@ Sanity check against a large user base (hundreds of thousands of users → milli
 - **Connection routing** (the real bottleneck): no single Server instance holds a million sockets, so the Server becomes N replicas and requests must reach the replica owning the target Daemon's socket. Solved by the connection registry (see § Architecture — Server); it is designed into the relay from the first commit because retrofitting it later is surgery.
 - **Relay bandwidth** (the real cost): every file transfer streams through Azure, so egress spend grows with users' copy habits — this is exactly why Parsec is P2P. The direct P2P upgrade (Parsec-style, brokered by the Server, relay as fallback) is not needed for v1 but becomes an economic requirement well before this scale.
 
-What already scales without change: PostgreSQL stores coordination metadata only, so 500k users is a small database; the Server is stateless w.r.t. file data and streams in chunks, so replicas scale horizontally; Agent/LLM cost is pay-per-token with per-user usage limits — linear, no cliff. Smaller shifts at that scale, none structural: scale-to-zero stops mattering, Container Apps may yield to AKS if connection density demands it, and multi-region is more stamps from the same Terraform.
+What already scales without change: PostgreSQL stores coordination metadata only, so 500k users is a small database; the Server is stateless w.r.t. file data and streams in chunks, so replicas scale horizontally; Agent/LLM cost is pay-per-token with per-user usage limits — linear, no cliff. Smaller shifts at that scale, none structural: scale-to-zero stops mattering, and Container Apps may yield to AKS if connection density demands it.
+
+**Going global** is the same sanity check against distance rather than load: a US or Asian user talking to a single West-Europe stamp pays the ocean twice on every relayed byte (client → Server → Daemon and back), and no amount of replicas fixes geography. The answer is an extension of the stamp model, not a redesign, in roughly this order:
+
+1. **A stamp per region** — the Terraform already parameterizes region, and a stamp is already the deployment unit; `prod-us` is `azd env new` away. The WebClient needs nothing: Static Web Apps serves it from a global CDN today.
+2. **Home each account to one region**, chosen at registration (nearest wins). The account's users, sessions, Daemons — and therefore every relayed byte — stay inside that region, which works because a person's machines and clients overwhelmingly share a geography. Region-homing also keeps each stamp's PostgreSQL and signing key independent: a user only ever talks to their home region, so nothing global has to verify tokens.
+3. **Route clients to their home region** — latency-based DNS (Front Door / Traffic Manager) on one hostname plus a redirect at sign-in, or per-region hostnames the clients learn at login. The one genuinely new piece in the whole plan is the small global account → home-region directory this consults.
+4. **Cross-region relay only if accounts ever span regions** (a machine in the US and one in Europe on one account): that is the connection registry's existing "requests follow the socket" answer applied one level up — forward the request to the region owning the Daemon's socket, exactly as replicas already forward to each other inside a stamp.
+
+Nothing about the Daemon, the protocol, the sandbox, or the data model changes — which is the point of having designed the socket-lookup indirection and coordination-only database in from the start.
 
 ## Hosting & infrastructure
 
@@ -421,13 +430,13 @@ sequenceDiagram
   C->>S: chat: "organize ~/Downloads by file type" on Daemon #42 (JWT, chosen model)
   S->>G: start/continue chat session (user-scoped token minted for the Agent)
   G->>F: Messages API: instruction + tool definitions (from MCP tools/list)
-  F-->>G: tool_use: list_dir(~/Downloads)
-  G->>S: MCP tools/call list_dir (bearer: user-scoped token)
+  F-->>G: tool_use: list_directory(~/Downloads)
+  G->>S: MCP tools/call list_directory (bearer: user-scoped token)
   S->>A: relay op over the open socket (authorization + sandbox as usual)
   A-->>S: directory entries
   S-->>G: MCP result
   G->>F: tool_result: entries
-  F-->>G: plan text + tool_use: create_dir / move × N
+  F-->>G: plan text + tool_use: create_directory / move_entry × N
   G-->>C: plan preview, wait for user confirmation (via Server/SignalR)
   C->>S: user confirms
   S-->>G: confirmation

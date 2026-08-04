@@ -40,6 +40,14 @@ curl -H "Authorization: Bearer <accessToken>" "http://localhost:5080/api/daemons
 curl -OJ -H "Authorization: Bearer <accessToken>" "http://localhost:5080/api/daemons/<registrationId>/download?path=/data/README.md"
 ```
 
+The AI door is the same setup minus the panes: mint a personal access token in the WebClient's Settings (the value is shown exactly once), then hand any MCP client the `/mcp` endpoint — e.g. for Claude Code:
+
+```sh
+claude mcp add --transport http angstrom http://localhost:5080/mcp --header "Authorization: Bearer acpat_..."
+```
+
+and ask it to list your machines or tidy a folder — same relay, sandbox, and quotas as the panes. The raw JSON-RPC requests are in [tools/Server.http](tools/Server.http) too.
+
 For working on the code, the [.NET 10 SDK](https://dotnet.microsoft.com/download) (`global.json` sets the floor and rolls forward to the newest 10.0 feature band installed) is enough: `dotnet test` builds everything and runs the test suites (integration tests start their own throwaway PostgreSQL via Testcontainers, so Docker must be running).
 
 ## Deploying to Azure
