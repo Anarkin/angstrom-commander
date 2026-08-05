@@ -3,7 +3,10 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using AngstromCommander.Protocol;
+using AngstromCommander.Server.Data;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace AngstromCommander.Server.Tests.Integration;
 
@@ -33,7 +36,8 @@ public sealed class McpEndpointTests(PostgresFixture postgres)
         Assert.Equal("Claude Code", pat.Name);
 
         // Revoke: gone from the list, and the door closes (proved in the MCP tests below).
-        using var revoked = await client.DeleteAsync(new Uri($"/api/pats/{created.Id}", UriKind.Relative));
+        using var revoked = await client.DeleteAsync(
+            new Uri($"/api/pats/{created.Id}", UriKind.Relative), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
         Assert.Empty(await GetAsync<List<PatListed>>(client, "/api/pats"));
     }
@@ -106,16 +110,110 @@ public sealed class McpEndpointTests(PostgresFixture postgres)
         // A PAT is not a REST credential either — the separation cuts both ways.
         using var patOnRest = factory.CreateClient();
         patOnRest.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", created.Token);
-        using var restRefused = await patOnRest.GetAsync(new Uri("/api/daemons", UriKind.Relative));
+        using var restRefused = await patOnRest.GetAsync(
+            new Uri("/api/daemons", UriKind.Relative), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Forbidden, restRefused.StatusCode);
 
         // And revocation slams the door mid-flight.
-        using var revoke = await userClient.DeleteAsync(new Uri($"/api/pats/{created.Id}", UriKind.Relative));
+        using var revoke = await userClient.DeleteAsync(
+            new Uri($"/api/pats/{created.Id}", UriKind.Relative), TestContext.Current.CancellationToken);
         revoke.EnsureSuccessStatusCode();
         using var afterRevoke = factory.CreateClient();
         afterRevoke.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", created.Token);
         using var dead = await SendMcpAsync(afterRevoke, InitializeBody);
         Assert.Equal(HttpStatusCode.Unauthorized, dead.StatusCode);
+    }
+
+    [Fact]
+    public async Task ADaemonTokenIsNotAnMcpCredentialEither()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+        using var userClient = factory.CreateClient();
+        await AuthenticateAsync(userClient, "daemon-at-mcp@example.com");
+
+        using var key = System.Security.Cryptography.ECDsa.Create(
+            System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+        var publicKeySpki = Convert.ToBase64String(key.ExportSubjectPublicKeyInfo());
+        using var daemonClient = factory.CreateClient();
+        var pairing = await PostAsync<Pairing>(
+            daemonClient, "/api/enrollment/code", new { publicKeySpki, platform = "TestOS" });
+        var claim = await PostAsync<Claimed>(
+            userClient, "/api/enrollment/claim", new { code = pairing.Code, displayName = "Machine" });
+        var challenge = await PostAsync<Challenge>(
+            daemonClient, "/api/daemon-auth/challenge", new { registrationId = claim.RegistrationId });
+        var signature = Convert.ToBase64String(key.SignData(
+            Convert.FromBase64String(challenge.Nonce), System.Security.Cryptography.HashAlgorithmName.SHA256));
+        var daemonToken = await PostAsync<Token>(
+            daemonClient, "/api/daemon-auth/token", new { registrationId = claim.RegistrationId, signature });
+
+        // The third row of the credential table, and the one nothing pinned: a machine's own
+        // token opens the relay hub and nothing else. It is signed with the same key as a user
+        // JWT, so only the token_type claim keeps it off the AI tool surface.
+        using var mcpClient = factory.CreateClient();
+        mcpClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", daemonToken.AccessToken);
+
+        using var refused = await SendMcpAsync(mcpClient, InitializeBody);
+        Assert.True(
+            refused.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden,
+            $"Expected 401/403, got {refused.StatusCode}.");
+    }
+
+    [Fact]
+    public async Task APatIsAcceptedWhateverCaseTheSchemeIsWrittenIn()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+        using var userClient = factory.CreateClient();
+        await AuthenticateAsync(userClient, "lowercase-bearer@example.com");
+        var created = await PostAsync<PatCreated>(userClient, "/api/pats", new { name = "case test" });
+
+        // RFC 7235 makes the auth scheme case-insensitive, and JwtBearerHandler treats it that
+        // way — so a client writing "bearer" used to be routed to the JWT handler, which tried
+        // to parse a PAT as a JWT and answered a bare 401 with nothing to debug against.
+        using var mcpClient = factory.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri("/mcp", UriKind.Relative))
+        {
+            Content = new StringContent(InitializeBody, Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+        request.Headers.TryAddWithoutValidation("Authorization", $"bearer {created.Token}");
+
+        using var response = await mcpClient.SendAsync(request, TestContext.Current.CancellationToken);
+        Assert.True(
+            response.IsSuccessStatusCode,
+            $"Expected the PAT to be accepted; got {response.StatusCode}.");
+    }
+
+    [Fact]
+    public async Task APatCarryingMoreThanOneScopeStillOpensTheDoor()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+        using var userClient = factory.CreateClient();
+        await AuthenticateAsync(userClient, "multiscope@example.com");
+        var created = await PostAsync<PatCreated>(userClient, "/api/pats", new { name = "wide" });
+
+        // The column holds scopes space-separated, and finer scopes are meant to be able to
+        // join without a schema change. One claim carrying the whole string would stop equalling
+        // "files" the moment a second scope existed, and every such token would be refused with
+        // nothing to explain it — so the claim has to be one per scope.
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.Sessions
+                .Where(s => s.Id == created.Id)
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(row => row.Scopes, "files read"),
+                    TestContext.Current.CancellationToken);
+        }
+
+        using var mcpClient = factory.CreateClient();
+        mcpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", created.Token);
+
+        using var response = await SendMcpAsync(mcpClient, InitializeBody);
+        Assert.True(
+            response.IsSuccessStatusCode,
+            $"Expected a multi-scope PAT to be accepted; got {response.StatusCode}.");
     }
 
     private const string InitializeBody = """

@@ -26,13 +26,13 @@ internal sealed class PatAuthenticationHandler(
 
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        var header = this.Request.Headers.Authorization.ToString();
-        if (!header.StartsWith($"Bearer {PersonalAccessTokens.Prefix}", StringComparison.Ordinal))
+        var token = PersonalAccessTokens.ReadFromHeader(this.Request.Headers.Authorization);
+        if (token is null)
         {
             return AuthenticateResult.NoResult();
         }
 
-        var hash = PersonalAccessTokens.Hash(header["Bearer ".Length..]);
+        var hash = PersonalAccessTokens.Hash(token);
         var db = this.Context.RequestServices.GetRequiredService<AppDbContext>();
         var session = await db.Sessions.FirstOrDefaultAsync(
             s => s.TokenHash == hash && s.Kind == UserSession.PatKind && s.RevokedAt == null);
@@ -48,14 +48,22 @@ internal sealed class PatAuthenticationHandler(
             await db.SaveChangesAsync();
         }
 
-        var identity = new ClaimsIdentity(
+        List<Claim> claims =
         [
-            new Claim(AuthClaims.Subject, session.UserId.ToString()),
-            new Claim(AuthClaims.TokenType, AuthClaims.PatTokenType),
-            new Claim(AuthClaims.SessionId, session.Id.ToString()),
-            new Claim(AuthClaims.Scopes, session.Scopes),
-        ],
-        SchemeName);
+            new(AuthClaims.Subject, session.UserId.ToString()),
+            new(AuthClaims.TokenType, AuthClaims.PatTokenType),
+            new(AuthClaims.SessionId, session.Id.ToString()),
+        ];
+
+        // One claim per scope. The column holds them space-separated, and an authorization
+        // policy's RequireClaim matches a claim's whole value — so the day a second scope
+        // exists, a single claim reading "files read" would stop equalling "files" and the
+        // token would be refused everywhere, with a bare 401 and nothing to debug against.
+        claims.AddRange(session.Scopes
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(static scope => new Claim(AuthClaims.Scopes, scope)));
+
+        var identity = new ClaimsIdentity(claims, SchemeName);
         return AuthenticateResult.Success(
             new AuthenticationTicket(new ClaimsPrincipal(identity), SchemeName));
     }

@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Threading.RateLimiting;
 using AngstromCommander.Server.Auth;
 using AngstromCommander.Server.Data;
@@ -28,6 +30,14 @@ builder.Services.Configure<ForwardedHeadersOptions>(static options =>
     // would discard the headers. Nothing reaches the Server except through that ingress.
     options.KnownIPNetworks.Clear();
     options.KnownProxies.Clear();
+
+    // Exactly one hop, stated rather than inherited: the caller's own X-Forwarded-For sits to
+    // the LEFT of the entry the ingress appends, so taking one entry from the right reads the
+    // address the ingress saw and a forged header is ignored. Raising this without a matching
+    // allow-list would start trusting caller-supplied entries; leaving it too low if a second
+    // proxy ever fronts the app collapses every caller into that proxy's bucket, which turns
+    // the anonymous rate limits into one global one. Either way it is a decision, not a default.
+    options.ForwardLimit = 1;
 });
 
 // The WebClient is served from its own origin (app.<domain> against api.<domain> in a real
@@ -96,8 +106,7 @@ var authOptions = builder.Configuration.GetSection(AuthOptions.SectionName).Get<
 builder.Services.AddAuthentication("TokenRouter")
     .AddPolicyScheme("TokenRouter", "JWT or PAT", static options =>
         options.ForwardDefaultSelector = static context =>
-            context.Request.Headers.Authorization.ToString()
-                .StartsWith($"Bearer {PersonalAccessTokens.Prefix}", StringComparison.Ordinal)
+            PersonalAccessTokens.ReadFromHeader(context.Request.Headers.Authorization) is not null
                 ? PatAuthenticationHandler.SchemeName
                 : JwtBearerDefaults.AuthenticationScheme)
     .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, PatAuthenticationHandler>(
@@ -167,17 +176,50 @@ app.MapMcp("/mcp").RequireAuthorization(AuthPolicies.Mcp);
 
 await app.RunAsync();
 
-// One bucket per caller address, which UseForwardedHeaders has already resolved to the real
-// client rather than the ingress in front of it.
+// One bucket per caller, which UseForwardedHeaders has already resolved to the real client
+// rather than the ingress in front of it.
 static RateLimitPartition<string> PartitionByCaller(HttpContext http, int permitsPerMinute)
 {
     return RateLimitPartition.GetFixedWindowLimiter(
-        http.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        CallerKey(http.Connection.RemoteIpAddress),
         _ => new FixedWindowRateLimiterOptions
         {
             PermitLimit = permitsPerMinute,
             Window = TimeSpan.FromMinutes(1),
         });
+}
+
+// The address alone is the wrong key for IPv6: a single customer is handed a /64 (often
+// a /56 or /48), so keying on the full /128 lets one caller step to a fresh address per
+// request and never meet a limit at all. The /64 is the smallest block that is reliably
+// one subscriber, so that is the bucket. IPv4 keys on the address as before.
+static string CallerKey(IPAddress? address)
+{
+    if (address is null)
+    {
+        return "unknown";
+    }
+
+    if (address.IsIPv4MappedToIPv6)
+    {
+        // "::ffff:1.2.3.4" is an IPv4 caller wearing an IPv6 shape; masking it as v6
+        // would put every such caller in one bucket.
+        address = address.MapToIPv4();
+    }
+
+    if (address.AddressFamily != AddressFamily.InterNetworkV6)
+    {
+        return address.ToString();
+    }
+
+    Span<byte> bytes = stackalloc byte[16];
+    if (!address.TryWriteBytes(bytes, out _))
+    {
+        return address.ToString();
+    }
+
+    bytes[8..].Clear();
+    return new IPAddress(bytes).ToString();
 }
 
 // Makes the implicit entry-point class nameable by WebApplicationFactory-based tests

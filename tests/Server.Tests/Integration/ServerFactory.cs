@@ -11,10 +11,13 @@ internal sealed class ServerFactory(string connectionString) : WebApplicationFac
 
     /// <summary>
     /// Rate limits, raised out of the way by default. TestServer connections carry no remote
-    /// address, so every request in a test shares one bucket — a test that wants the limiter has
-    /// to ask for it (see <c>RateLimitingTests</c>).
+    /// address, so unless a test sends X-Forwarded-For every request shares one bucket — a test
+    /// that wants the limiter has to ask for it (see <c>SignInProtectionTests</c>).
     /// </summary>
     public int AuthenticationPermitsPerMinute { get; init; } = 10_000;
+
+    /// <summary>The enrollment status poll's own, roomier allowance.</summary>
+    public int EnrollmentPollPermitsPerMinute { get; init; } = 10_000;
 
     /// <summary>
     /// Which environment to boot as, for the behaviour that differs outside Development. Left
@@ -47,6 +50,9 @@ internal sealed class ServerFactory(string connectionString) : WebApplicationFac
         builder.UseSetting(
             "RateLimiting:AuthenticationPermitsPerMinute",
             this.AuthenticationPermitsPerMinute.ToString(CultureInfo.InvariantCulture));
+        builder.UseSetting(
+            "RateLimiting:EnrollmentPollPermitsPerMinute",
+            this.EnrollmentPollPermitsPerMinute.ToString(CultureInfo.InvariantCulture));
 
         if (this.DailyBytesPerUser is long dailyBytes)
         {

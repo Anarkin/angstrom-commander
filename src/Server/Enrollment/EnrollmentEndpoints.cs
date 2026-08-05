@@ -10,6 +10,13 @@ internal static class EnrollmentEndpoints
 {
     private static readonly TimeSpan CodeLifetime = TimeSpan.FromMinutes(10);
 
+    /// <summary>
+    /// How long a claimed code stays answerable, counted from the claim. Long enough for the
+    /// enrolling Daemon's next poll to collect its registration id, short enough that the code
+    /// stops being a lookup for that id almost immediately afterwards.
+    /// </summary>
+    private static readonly TimeSpan ClaimGrace = TimeSpan.FromMinutes(2);
+
     public static IEndpointRouteBuilder MapEnrollmentEndpoints(this IEndpointRouteBuilder app)
     {
         // Called by an enrolling Daemon (it has no identity yet, so this is anonymous).
@@ -31,11 +38,13 @@ internal static class EnrollmentEndpoints
 
                 // One live code per machine: a restarted Daemon polls only its newest code,
                 // so older unclaimed ones must stop being claimable (they'd pair to nobody).
-                // Expired unclaimed codes are swept opportunistically at the same time.
+                // Expired codes are swept opportunistically at the same time — claimed ones
+                // included, or the table would keep one row per pairing forever and every one
+                // of them would stay an anonymous code-to-registrationId lookup.
                 var now = DateTimeOffset.UtcNow;
                 await db.PairingCodes
-                    .Where(c => c.ClaimedRegistrationId == null
-                        && (c.PublicKeySpki == request.PublicKeySpki || c.ExpiresAt < now))
+                    .Where(c => (c.ClaimedRegistrationId == null && c.PublicKeySpki == request.PublicKeySpki)
+                        || c.ExpiresAt < now)
                     .ExecuteDeleteAsync(cancellationToken);
 
                 var code = new PairingCode
@@ -62,9 +71,15 @@ internal static class EnrollmentEndpoints
                 AppDbContext db,
                 CancellationToken cancellationToken) =>
             {
+                // Expiry applies whether or not the code was claimed. Exempting claimed ones
+                // (so the Daemon could still collect its registration id) left every code that
+                // ever paired answering forever: a code from a screenshot or a scrollback stayed
+                // an anonymous lookup from a short string to a live registration id, which is
+                // enough to drive the challenge endpoint and confirm the machine is still
+                // enrolled. Claiming extends the window instead — see ClaimGrace below.
                 var pairingCode = await db.PairingCodes.AsNoTracking()
                     .FirstOrDefaultAsync(c => c.Code == code, cancellationToken);
-                if (pairingCode is null || (pairingCode.ClaimedRegistrationId is null && pairingCode.ExpiresAt < DateTimeOffset.UtcNow))
+                if (pairingCode is null || pairingCode.ExpiresAt < DateTimeOffset.UtcNow)
                 {
                     return TypedResults.NotFound();
                 }
@@ -96,8 +111,9 @@ internal static class EnrollmentEndpoints
                 }
 
                 var now = DateTimeOffset.UtcNow;
-                await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
 
+                // Looked up before the transaction opens: a wrong code is the common case
+                // (people mistype them), and it has no business starting one.
                 var pairingCode = await db.PairingCodes.AsNoTracking()
                     .FirstOrDefaultAsync(c => c.Code == request.Code, cancellationToken);
                 if (pairingCode is null
@@ -106,6 +122,8 @@ internal static class EnrollmentEndpoints
                 {
                     return UnusableCode();
                 }
+
+                await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
 
                 var registration = new DaemonRegistration
                 {
@@ -121,10 +139,17 @@ internal static class EnrollmentEndpoints
                 // both pass it, and the loser would pair the same machine a second time. Only the
                 // request whose update still finds the code unclaimed goes on to register, and the
                 // whole thing is one transaction so a burned code never outlives its registration.
+                // Claiming also pushes the expiry out, so a code claimed in its last seconds
+                // still survives long enough for the Daemon's next poll to collect the
+                // registration id. Without it the machine would sit on the pairing screen
+                // holding a code that had already paired to the account.
+                var graceUntil = now.Add(ClaimGrace);
                 var claimed = await db.PairingCodes
                     .Where(c => c.Code == request.Code && c.ClaimedRegistrationId == null && c.ExpiresAt >= now)
                     .ExecuteUpdateAsync(
-                        setters => setters.SetProperty(c => c.ClaimedRegistrationId, registration.Id),
+                        setters => setters
+                            .SetProperty(c => c.ClaimedRegistrationId, registration.Id)
+                            .SetProperty(c => c.ExpiresAt, c => c.ExpiresAt > graceUntil ? c.ExpiresAt : graceUntil),
                         cancellationToken);
                 if (claimed == 0)
                 {
@@ -140,6 +165,10 @@ internal static class EnrollmentEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ValidatesRequest<ClaimRequest>()
+            // Guessing codes is impractical on entropy alone, but every other endpoint that
+            // takes a guessable secret is throttled and this one was not: unthrottled, a single
+            // account can put an unbounded stream of misses through it.
+            .RequireRateLimiting(RateLimitPolicies.Authentication)
             .RequireAuthorization(AuthPolicies.User);
 
         return app;

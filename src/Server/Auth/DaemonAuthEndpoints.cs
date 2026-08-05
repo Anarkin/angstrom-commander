@@ -29,9 +29,9 @@ internal static class DaemonAuthEndpoints
                     return TypedResults.NotFound();
                 }
 
-                var nonce = RandomNumberGenerator.GetBytes(32);
+                var nonce = new DaemonNonce(RandomNumberGenerator.GetBytes(32));
                 cache.Set(NonceCacheKey(request.RegistrationId), nonce, NonceLifetime);
-                return TypedResults.Ok(new ChallengeResponse(Convert.ToBase64String(nonce)));
+                return TypedResults.Ok(new ChallengeResponse(Convert.ToBase64String(nonce.Value)));
             })
             .RequireRateLimiting(RateLimitPolicies.Authentication);
 
@@ -44,7 +44,12 @@ internal static class DaemonAuthEndpoints
                 TokenService tokens,
                 CancellationToken cancellationToken) =>
             {
-                if (!cache.TryGetValue<byte[]>(NonceCacheKey(request.RegistrationId), out var nonce) || nonce is null)
+                // Claimed before anything is verified, and claimed atomically: reading the nonce
+                // and then removing it is two steps, so two requests could both pass between
+                // them and replay the same signature — which is the one thing single use is for.
+                if (!cache.TryGetValue<DaemonNonce>(NonceCacheKey(request.RegistrationId), out var nonce)
+                    || nonce is null
+                    || !nonce.TryConsume())
                 {
                     return TypedResults.Unauthorized();
                 }
@@ -70,7 +75,7 @@ internal static class DaemonAuthEndpoints
                         return TypedResults.Unauthorized();
                     }
 
-                    if (!key.VerifyData(nonce, signature, HashAlgorithmName.SHA256))
+                    if (!key.VerifyData(nonce.Value, signature, HashAlgorithmName.SHA256))
                     {
                         return TypedResults.Unauthorized();
                     }
@@ -87,6 +92,20 @@ internal static class DaemonAuthEndpoints
     private static string NonceCacheKey(Guid registrationId)
     {
         return $"daemon-nonce:{registrationId}";
+    }
+
+    /// <summary>A challenge nonce and the flag that lets exactly one caller spend it.</summary>
+    private sealed class DaemonNonce(byte[] value)
+    {
+        private int _consumed;
+
+        public byte[] Value { get; } = value;
+
+        /// <summary>True for the first caller to reach it, false for every other, always.</summary>
+        public bool TryConsume()
+        {
+            return Interlocked.Exchange(ref this._consumed, 1) == 0;
+        }
     }
 }
 

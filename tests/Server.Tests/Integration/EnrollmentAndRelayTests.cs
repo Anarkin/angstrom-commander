@@ -34,7 +34,8 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
             daemonClient, "/api/enrollment/code", new { publicKeySpki, platform = "TestOS" });
 
         // Unclaimed code polls as 204.
-        using var pending = await daemonClient.GetAsync(EnrollmentStatusUri(pairing.Code));
+        using var pending = await daemonClient.GetAsync(
+            EnrollmentStatusUri(pairing.Code), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NoContent, pending.StatusCode);
 
         // The logged-in user claims the code.
@@ -64,7 +65,7 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
         daemonConnection.On(
             DaemonHubMethods.ListRoots,
             static () => new ListRootsResponse([new SharedRoot("/data", Writable: false)]));
-        await daemonConnection.StartAsync();
+        await daemonConnection.StartAsync(TestContext.Current.CancellationToken);
 
         // The user's machine list shows it online.
         var machines = await GetAsync<List<MachineResponse>>(userClient, new Uri("/api/daemons", UriKind.Relative));
@@ -101,7 +102,8 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
         strangerClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", strangerToken);
 
         using var listResponse = await strangerClient.GetAsync(
-            new Uri($"/api/daemons/{registrationId}/list?path=/data", UriKind.Relative));
+            new Uri($"/api/daemons/{registrationId}/list?path=/data", UriKind.Relative),
+            TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, listResponse.StatusCode);
 
         var strangerMachines = await GetAsync<List<MachineResponse>>(
@@ -136,12 +138,108 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
         // must not open the endpoints that act on a user's behalf.
         daemonClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", daemonToken.AccessToken);
-        using var machines = await daemonClient.GetAsync(new Uri("/api/daemons", UriKind.Relative));
+        using var machines = await daemonClient.GetAsync(
+            new Uri("/api/daemons", UriKind.Relative), TestContext.Current.CancellationToken);
         using var listing = await daemonClient.GetAsync(
-            new Uri($"/api/daemons/{claim.RegistrationId}/list?path=/data", UriKind.Relative));
+            new Uri($"/api/daemons/{claim.RegistrationId}/list?path=/data", UriKind.Relative),
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Forbidden, machines.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, listing.StatusCode);
+    }
+
+    [Fact]
+    public async Task AUsersTokenIsNotADaemonToken()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+        using var userClient = factory.CreateClient();
+        var userToken = await RegisterAndLoginAsync(userClient, "hubwall@example.com");
+
+        // The other direction of the wall ADaemonsConnectionTokenIsNotAUserToken pins. Both
+        // JWTs are signed with the same key and pass the same signature check, so after that
+        // point the token_type claim is the only thing standing between a signed-in person and
+        // the relay hub — where a connection would register as somebody's machine.
+        await using var connection = BuildDaemonConnection(factory, userToken);
+
+        var refused = await Assert.ThrowsAnyAsync<HttpRequestException>(
+            () => connection.StartAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+    }
+
+    [Fact]
+    public async Task AChallengeNonceIsSpentByTheFirstCallerAndNeverWorksAgain()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+        using var userClient = factory.CreateClient();
+        var userToken = await RegisterAndLoginAsync(userClient, "replay@example.com");
+        userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var publicKeySpki = Convert.ToBase64String(key.ExportSubjectPublicKeyInfo());
+        using var daemonClient = factory.CreateClient();
+        var pairing = await PostAsync<PairingResponse>(
+            daemonClient, "/api/enrollment/code", new { publicKeySpki, platform = "TestOS" });
+        var claim = await PostAsync<ClaimResponse>(
+            userClient, "/api/enrollment/claim", new { code = pairing.Code, displayName = "Machine" });
+
+        var challenge = await PostAsync<ChallengeResponse>(
+            daemonClient, "/api/daemon-auth/challenge", new { registrationId = claim.RegistrationId });
+        var signature = Convert.ToBase64String(
+            key.SignData(Convert.FromBase64String(challenge.Nonce), HashAlgorithmName.SHA256));
+
+        using var first = await daemonClient.PostAsJsonAsync(
+            "/api/daemon-auth/token",
+            new { registrationId = claim.RegistrationId, signature },
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+
+        // Single use is what makes a captured exchange worthless: the signature is valid
+        // forever, so if the nonce it answered could be spent twice, anyone who recorded one
+        // successful connect could mint connection tokens for that machine at will.
+        using var replay = await daemonClient.PostAsJsonAsync(
+            "/api/daemon-auth/token",
+            new { registrationId = claim.RegistrationId, signature },
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, replay.StatusCode);
+    }
+
+    [Fact]
+    public async Task AClaimedPairingCodeStopsAnsweringOnceItExpires()
+    {
+        using var factory = new ServerFactory(postgres.ConnectionString);
+        using var userClient = factory.CreateClient();
+        var userToken = await RegisterAndLoginAsync(userClient, "staleCode@example.com");
+        userClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var publicKeySpki = Convert.ToBase64String(key.ExportSubjectPublicKeyInfo());
+        using var daemonClient = factory.CreateClient();
+        var pairing = await PostAsync<PairingResponse>(
+            daemonClient, "/api/enrollment/code", new { publicKeySpki, platform = "TestOS" });
+        var claim = await PostAsync<ClaimResponse>(
+            userClient, "/api/enrollment/claim", new { code = pairing.Code, displayName = "Machine" });
+
+        // Right after the claim the enrolling Daemon must still be able to collect its
+        // registration id — that poll is the whole point of the endpoint.
+        var status = await GetAsync<StatusResponse>(daemonClient, EnrollmentStatusUri(pairing.Code));
+        Assert.Equal(claim.RegistrationId, status.RegistrationId);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.PairingCodes
+                .Where(c => c.Code == pairing.Code)
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(c => c.ExpiresAt, DateTimeOffset.UtcNow.AddMinutes(-1)),
+                    TestContext.Current.CancellationToken);
+        }
+
+        // Once the window is over it is nobody's business again. A claimed code used to answer
+        // forever, which left every code that ever paired a permanent anonymous lookup from a
+        // short string — one screenshot, one scrollback — to a live registration id.
+        using var expired = await daemonClient.GetAsync(
+            EnrollmentStatusUri(pairing.Code), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, expired.StatusCode);
     }
 
     [Fact]
@@ -159,17 +257,20 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             await db.DaemonRegistrations
                 .Where(r => r.Id == registrationId)
-                .ExecuteUpdateAsync(s => s.SetProperty(r => r.RevokedAt, DateTimeOffset.UtcNow));
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(r => r.RevokedAt, DateTimeOffset.UtcNow),
+                    TestContext.Current.CancellationToken);
         }
 
         // Revoking has to cut both ways: the machine disappears from the account, and it can no
         // longer earn a connection token to dial back in with.
         var machines = await GetAsync<List<MachineResponse>>(userClient, new Uri("/api/daemons", UriKind.Relative));
         using var listing = await userClient.GetAsync(
-            new Uri($"/api/daemons/{registrationId}/list?path=/data", UriKind.Relative));
+            new Uri($"/api/daemons/{registrationId}/list?path=/data", UriKind.Relative),
+            TestContext.Current.CancellationToken);
         using var daemonClient = factory.CreateClient();
         using var challenge = await daemonClient.PostAsJsonAsync(
-            "/api/daemon-auth/challenge", new { registrationId });
+            "/api/daemon-auth/challenge", new { registrationId }, TestContext.Current.CancellationToken);
 
         Assert.Empty(machines);
         Assert.Equal(HttpStatusCode.NotFound, listing.StatusCode);
@@ -193,11 +294,12 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
         await using (connection)
         {
             using var unpair = await userClient.DeleteAsync(
-                new Uri($"/api/daemons/{registrationId}", UriKind.Relative));
+                new Uri($"/api/daemons/{registrationId}", UriKind.Relative),
+                TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.NoContent, unpair.StatusCode);
 
             // The connected Daemon hears about it without waiting for a reconnect...
-            await told.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await told.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
             // ...the machine is gone from the account, and every door is closed:
             // relay ops, the challenge, and a second unpair all answer as if it never was.
@@ -205,16 +307,18 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
             Assert.Empty(machines);
 
             using var listing = await userClient.GetAsync(
-                new Uri($"/api/daemons/{registrationId}/list?path=/data", UriKind.Relative));
+                new Uri($"/api/daemons/{registrationId}/list?path=/data", UriKind.Relative),
+                TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.NotFound, listing.StatusCode);
 
             using var daemonClient = factory.CreateClient();
             using var challenge = await daemonClient.PostAsJsonAsync(
-                "/api/daemon-auth/challenge", new { registrationId });
+                "/api/daemon-auth/challenge", new { registrationId }, TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.NotFound, challenge.StatusCode);
 
             using var again = await userClient.DeleteAsync(
-                new Uri($"/api/daemons/{registrationId}", UriKind.Relative));
+                new Uri($"/api/daemons/{registrationId}", UriKind.Relative),
+                TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.NotFound, again.StatusCode);
         }
     }
@@ -234,7 +338,8 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
         strangerClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", strangerToken);
 
         using var response = await strangerClient.DeleteAsync(
-            new Uri($"/api/daemons/{registrationId}", UriKind.Relative));
+            new Uri($"/api/daemons/{registrationId}", UriKind.Relative),
+            TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
 
         // And the owner's machine is untouched.
@@ -249,7 +354,8 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
         using var anonymousClient = factory.CreateClient();
 
         using var response = await anonymousClient.GetAsync(
-            new Uri($"/api/daemons/{Guid.NewGuid()}/list?path=/data", UriKind.Relative));
+            new Uri($"/api/daemons/{Guid.NewGuid()}/list?path=/data", UriKind.Relative),
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
@@ -274,7 +380,9 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
 
         // The orphaned code pairs to nobody — claiming it must fail.
         using var staleClaim = await userClient.PostAsJsonAsync(
-            "/api/enrollment/claim", new { code = stale.Code, displayName = "Ghost" });
+            "/api/enrollment/claim",
+            new { code = stale.Code, displayName = "Ghost" },
+            TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, staleClaim.StatusCode);
 
         // The code the Daemon is actually polling works.
@@ -330,7 +438,9 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await db.Users.Where(u => u.Email == "ghost@example.com").ExecuteDeleteAsync();
+            await db.Users
+                .Where(u => u.Email == "ghost@example.com")
+                .ExecuteDeleteAsync(TestContext.Current.CancellationToken);
         }
 
         using var daemonKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
@@ -339,7 +449,9 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
             client, "/api/enrollment/code", new { publicKeySpki, platform = "TestOS" });
 
         using var response = await client.PostAsJsonAsync(
-            "/api/enrollment/claim", new { code = pairing.Code, displayName = "Ghost Machine" });
+            "/api/enrollment/claim",
+            new { code = pairing.Code, displayName = "Ghost Machine" },
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
@@ -364,7 +476,9 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
             wrongKey.SignData(Convert.FromBase64String(challenge.Nonce), HashAlgorithmName.SHA256));
 
         using var response = await attackerClient.PostAsJsonAsync(
-            "/api/daemon-auth/token", new { registrationId, signature = forgedSignature });
+            "/api/daemon-auth/token",
+            new { registrationId, signature = forgedSignature },
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
@@ -394,15 +508,16 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
         await using (connection)
         {
             using var response = await userClient.GetAsync(
-                new Uri($"/api/daemons/{registrationId}/download?path=/data/blob.bin", UriKind.Relative));
+                new Uri($"/api/daemons/{registrationId}/download?path=/data/blob.bin", UriKind.Relative),
+                TestContext.Current.CancellationToken);
 
             if (!response.IsSuccessStatusCode)
             {
-                Assert.Fail(await response.Content.ReadAsStringAsync());
+                Assert.Fail(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
             }
 
             Assert.Contains("blob.bin", response.Content.Headers.ContentDisposition?.ToString(), StringComparison.Ordinal);
-            var bytes = await response.Content.ReadAsByteArrayAsync();
+            var bytes = await response.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken);
             Assert.Equal(payload, bytes);
         }
     }
@@ -435,14 +550,18 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
             for (var attempt = 1; attempt <= 20; attempt++)
             {
                 using var response = await userClient.GetAsync(
-                    new Uri($"/api/daemons/{registrationId}/download?path=/data/blob.bin", UriKind.Relative));
+                    new Uri($"/api/daemons/{registrationId}/download?path=/data/blob.bin", UriKind.Relative),
+                    TestContext.Current.CancellationToken);
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    Assert.Fail($"Download {attempt} failed: {await response.Content.ReadAsStringAsync()}");
+                    var failure = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+                    Assert.Fail($"Download {attempt} failed: {failure}");
                 }
 
-                Assert.Equal(payload, await response.Content.ReadAsByteArrayAsync());
+                Assert.Equal(
+                    payload,
+                    await response.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken));
             }
         }
     }
@@ -463,7 +582,8 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
         await using (connection)
         {
             using var response = await userClient.GetAsync(
-                new Uri($"/api/daemons/{registrationId}/download?path=/forbidden", UriKind.Relative));
+                new Uri($"/api/daemons/{registrationId}/download?path=/forbidden", UriKind.Relative),
+                TestContext.Current.CancellationToken);
 
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         }
@@ -504,14 +624,17 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
         {
             using var content = new ByteArrayContent(payload);
             using var response = await userClient.PostAsync(
-                new Uri($"/api/daemons/{registrationId}/upload?path=/uploads/blob.bin", UriKind.Relative), content);
+                new Uri($"/api/daemons/{registrationId}/upload?path=/uploads/blob.bin", UriKind.Relative),
+                content,
+                TestContext.Current.CancellationToken);
 
             if (!response.IsSuccessStatusCode)
             {
-                Assert.Fail(await response.Content.ReadAsStringAsync());
+                Assert.Fail(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
             }
 
-            var transferred = await response.Content.ReadFromJsonAsync<TransferredResponse>();
+            var transferred = await response.Content.ReadFromJsonAsync<TransferredResponse>(
+                TestContext.Current.CancellationToken);
             Assert.Equal(payload.Length, transferred?.BytesTransferred);
             Assert.Equal(payload, received.ToArray());
         }
@@ -546,15 +669,21 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
             // Three times the quota: the upload dies mid-body with the quota's own message.
             using var content = new ByteArrayContent(new byte[300_000]);
             using var response = await userClient.PostAsync(
-                new Uri($"/api/daemons/{registrationId}/upload?path=/uploads/big.bin", UriKind.Relative), content);
+                new Uri($"/api/daemons/{registrationId}/upload?path=/uploads/big.bin", UriKind.Relative),
+                content,
+                TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
-            Assert.Contains("Daily transfer limit", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+            Assert.Contains(
+                "Daily transfer limit",
+                await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken),
+                StringComparison.Ordinal);
 
             // And with the allowance spent, the next transfer is refused before any byte moves.
             using var secondContent = new ByteArrayContent([1]);
             using var second = await userClient.PostAsync(
                 new Uri($"/api/daemons/{registrationId}/upload?path=/uploads/small.bin", UriKind.Relative),
-                secondContent);
+                secondContent,
+                TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
         }
     }
@@ -593,7 +722,9 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
         {
             using var content = new ByteArrayContent(new byte[50_000]);
             using var response = await userClient.PostAsync(
-                new Uri($"/api/daemons/{registrationId}/upload?path=/uploads/metered.bin", UriKind.Relative), content);
+                new Uri($"/api/daemons/{registrationId}/upload?path=/uploads/metered.bin", UriKind.Relative),
+                content,
+                TestContext.Current.CancellationToken);
             response.EnsureSuccessStatusCode();
 
             var after = await GetAsync<UsageResponse>(userClient, new Uri("/api/transfers/usage", UriKind.Relative));
@@ -618,7 +749,9 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
         {
             using var content = new ByteArrayContent([1, 2, 3]);
             using var response = await userClient.PostAsync(
-                new Uri($"/api/daemons/{registrationId}/upload?path=/data/blocked.bin", UriKind.Relative), content);
+                new Uri($"/api/daemons/{registrationId}/upload?path=/data/blocked.bin", UriKind.Relative),
+                content,
+                TestContext.Current.CancellationToken);
 
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         }
@@ -652,26 +785,34 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
         await using (connection)
         {
             using var mkdir = await userClient.PostAsync(
-                new Uri($"/api/daemons/{registrationId}/mkdir?path=/uploads/new", UriKind.Relative), null);
+                new Uri($"/api/daemons/{registrationId}/mkdir?path=/uploads/new", UriKind.Relative),
+                null,
+                TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.NoContent, mkdir.StatusCode);
 
             using var move = await userClient.PostAsync(
                 new Uri(
                     $"/api/daemons/{registrationId}/move?sourcePath=/uploads/a.txt&targetPath=/uploads/b.txt",
                     UriKind.Relative),
-                null);
+                null,
+                TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.NoContent, move.StatusCode);
 
             using var delete = await userClient.DeleteAsync(
-                new Uri($"/api/daemons/{registrationId}/entries?path=/uploads/b.txt", UriKind.Relative));
+                new Uri($"/api/daemons/{registrationId}/entries?path=/uploads/b.txt", UriKind.Relative),
+                TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.NoContent, delete.StatusCode);
 
             // A refusal arrives as a 400 carrying the Daemon's reason, ready for a screen.
             using var refused = await userClient.PostAsync(
-                new Uri($"/api/daemons/{registrationId}/mkdir?path=/data/nope", UriKind.Relative), null);
+                new Uri($"/api/daemons/{registrationId}/mkdir?path=/data/nope", UriKind.Relative),
+                null,
+                TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
             Assert.Contains(
-                "writable root", await refused.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+                "writable root",
+                await refused.Content.ReadAsStringAsync(TestContext.Current.CancellationToken),
+                StringComparison.Ordinal);
         }
     }
 
@@ -724,11 +865,12 @@ public sealed class EnrollmentAndRelayTests(PostgresFixture postgres)
                 new Uri(
                     $"/api/daemons/{sourceId}/copy-to/{targetId}?sourcePath=/data/blob.bin&targetPath=/uploads/blob.bin",
                     UriKind.Relative),
-                content: null);
+                content: null,
+                TestContext.Current.CancellationToken);
 
             if (!response.IsSuccessStatusCode)
             {
-                Assert.Fail(await response.Content.ReadAsStringAsync());
+                Assert.Fail(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
             }
 
             Assert.Equal(payload, received.ToArray());

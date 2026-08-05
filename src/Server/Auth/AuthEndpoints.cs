@@ -28,9 +28,20 @@ internal static class AuthEndpoints
                 var result = await users.CreateAsync(user, request.Password);
                 if (!result.Succeeded)
                 {
+                    // Identity's own wording names the address back ("Email 'x' is already
+                    // taken"), which turns this endpoint into the account-existence check
+                    // /api/auth/login refuses to be. Errors about the submitted password are
+                    // safe to repeat — the caller chose it — but a duplicate says something
+                    // about somebody else, so it gets a message that fits either case.
+                    var duplicate = result.Errors.Any(static e =>
+                        e.Code is "DuplicateEmail" or "DuplicateUserName");
+                    var messages = duplicate
+                        ? [DuplicateOrRefused]
+                        : result.Errors.Select(static e => e.Description).ToArray();
+
                     return TypedResults.ValidationProblem(new Dictionary<string, string[]>
                     {
-                        ["registration"] = result.Errors.Select(static e => e.Description).ToArray(),
+                        ["registration"] = messages,
                     });
                 }
 
@@ -65,9 +76,15 @@ internal static class AuthEndpoints
                 var result = await signIn.CheckPasswordSignInAsync(user, request.Password, lockoutOnFailure: true);
                 if (result.IsLockedOut)
                 {
-                    return TypedResults.Problem(
-                        detail: "Too many failed sign-in attempts. Try again in a few minutes.",
-                        statusCode: StatusCodes.Status401Unauthorized);
+                    // Deliberately the same answer as a wrong password, because a lockout can
+                    // only happen to an account that exists: saying so would hand back exactly
+                    // the enumeration this endpoint spends the branch above preventing. Five
+                    // wrong guesses would otherwise be a membership test for any address.
+                    // Hash first — the lockout check short-circuits before Identity verifies
+                    // anything, so returning here directly would answer measurably faster than
+                    // either other path and re-open the same channel with a stopwatch.
+                    users.PasswordHasher.HashPassword(new AppUser(), request.Password);
+                    return WrongCredentials();
                 }
 
                 if (!result.Succeeded)
@@ -85,8 +102,21 @@ internal static class AuthEndpoints
     }
 
     /// <summary>
-    /// One answer for "no such account" and "wrong password" alike, so the endpoint does not
-    /// double as a way to find out which email addresses have accounts.
+    /// The answer to a registration that cannot go ahead for a reason about the address rather
+    /// than the password, worded so it does not confirm an account exists.
+    /// </summary>
+    /// <remarks>
+    /// This narrows the leak rather than closing it: registration that succeeds still proves the
+    /// address was free. Only a flow that answers identically either way — create-or-email, which
+    /// needs the email verification ARCHITECTURE.md § Implementation status already lists as the
+    /// prerequisite for opening registration — closes it completely.
+    /// </remarks>
+    private const string DuplicateOrRefused =
+        "That email address cannot be registered. If you already have an account, sign in instead.";
+
+    /// <summary>
+    /// One answer for "no such account", "wrong password" and "locked out" alike, so the endpoint
+    /// does not double as a way to find out which email addresses have accounts.
     /// </summary>
     private static ProblemHttpResult WrongCredentials()
     {
