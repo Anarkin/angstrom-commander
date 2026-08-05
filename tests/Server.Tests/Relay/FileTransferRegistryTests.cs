@@ -57,11 +57,12 @@ public class FileTransferRegistryTests
     {
         var registry = CreateRegistry();
         var transferId = Create(registry, writerRegistrationId: null, readerRegistrationId: Receiver);
-        var completion = registry.Completion(transferId);
+        var completion = registry.WaitForCompletionAsync(
+            transferId, TimeSpan.FromSeconds(5), CancellationToken.None);
 
         registry.AbandonFor(Receiver);
 
-        Assert.NotNull(await completion.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.NotNull(await completion);
     }
 
     [Fact]
@@ -77,11 +78,87 @@ public class FileTransferRegistryTests
         // truncated download as a success.
         await Assert.ThrowsAsync<IOException>(async () =>
         {
-            await foreach (var chunk in channel.Reader.ReadAllAsync())
+            await foreach (var chunk in channel.Reader.ReadAllAsync(TestContext.Current.CancellationToken))
             {
                 Assert.Empty(chunk);
             }
         });
+    }
+
+    [Fact]
+    public async Task RemovingATransferFailsTheStreamRatherThanEndingIt()
+    {
+        var registry = CreateRegistry();
+        var transferId = Create(registry, writerRegistrationId: Sender, readerRegistrationId: Receiver);
+        Assert.True(registry.TryGetChannel(transferId, out var channel));
+
+        // Remove is what every transfer endpoint calls on its way out — including the ways out
+        // that are failures. Ending the channel cleanly there tells the receiving Daemon the
+        // file is complete, so a copy cut short mid-stream is written to disk under its final
+        // name and reported as a success. Only an error reaches the receiver as a failure.
+        registry.Remove(transferId);
+
+        await Assert.ThrowsAsync<IOException>(async () =>
+        {
+            await foreach (var chunk in channel.Reader.ReadAllAsync(TestContext.Current.CancellationToken))
+            {
+                Assert.Empty(chunk);
+            }
+        });
+    }
+
+    [Fact]
+    public async Task ATransferStillMovingIsNotTimedOut()
+    {
+        var registry = CreateRegistry();
+        var transferId = Create(registry, writerRegistrationId: Sender, readerRegistrationId: Receiver);
+
+        // The deadline is a stall deadline, not a duration cap: this transfer runs three times
+        // longer than one window and must survive, because it never stops moving. A cap here
+        // would fail every copy slower than the window — on the default bandwidth ceiling, any
+        // copy over about 750 MB — and hand the target a truncated file besides.
+        var stallTimeout = TimeSpan.FromMilliseconds(500);
+        var waiting = registry.WaitForCompletionAsync(transferId, stallTimeout, CancellationToken.None);
+
+        for (var chunk = 0; chunk < 15; chunk++)
+        {
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+            await registry.MeterAsync(transferId, 1, CancellationToken.None);
+        }
+
+        Assert.True(registry.TryComplete(transferId, Receiver, error: null));
+        Assert.Null(await waiting);
+    }
+
+    [Fact]
+    public async Task ATransferThatGoesSilentTimesOut()
+    {
+        var registry = CreateRegistry();
+        var transferId = Create(registry, writerRegistrationId: Sender, readerRegistrationId: Receiver);
+
+        // The other half of the same rule: no bytes for a whole window is a dead transfer, and
+        // the endpoint has to be let go rather than hold the caller open forever.
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            registry.WaitForCompletionAsync(transferId, TimeSpan.FromMilliseconds(300), CancellationToken.None));
+    }
+
+    [Fact]
+    public void TheConcurrencyCeilingIsConfigurable()
+    {
+        // Environments size their own limits; this one was a const long after the quota and
+        // bandwidth caps became options, so the docs promised a knob that did not exist.
+        var registry = CreateRegistry(concurrentTransfersPerUser: 2);
+        var user = Guid.NewGuid();
+
+        Assert.Equal(
+            CreateTransferResult.Created,
+            registry.TryCreate(user, writerRegistrationId: Sender, readerRegistrationId: null, out _));
+        Assert.Equal(
+            CreateTransferResult.Created,
+            registry.TryCreate(user, writerRegistrationId: Sender, readerRegistrationId: null, out _));
+        Assert.Equal(
+            CreateTransferResult.TooManyConcurrent,
+            registry.TryCreate(user, writerRegistrationId: Sender, readerRegistrationId: null, out _));
     }
 
     [Fact]
@@ -148,14 +225,13 @@ public class FileTransferRegistryTests
         // Within the allowance: fine. The byte that crosses it: the transfer dies with the
         // quota's own message, so the failure explains itself. (The completion task is taken
         // up front, the way the copy endpoint holds it while bytes flow.)
-        var completion = registry.Completion(transferId);
+        var completion = registry.WaitForCompletionAsync(
+            transferId, TimeSpan.FromSeconds(5), CancellationToken.None);
         await registry.MeterAsync(transferId, 100, CancellationToken.None);
         await Assert.ThrowsAsync<TransferQuotaExceededException>(
             () => registry.MeterAsync(transferId, 1, CancellationToken.None));
         Assert.False(registry.TryGetChannel(transferId, out _));
-        Assert.Equal(
-            TransferQuotaExceededException.UserFacingMessage,
-            await completion.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(TransferQuotaExceededException.UserFacingMessage, await completion);
 
         // And no new transfer starts while the allowance is spent — but only for that user.
         Assert.Equal(
@@ -229,7 +305,10 @@ public class FileTransferRegistryTests
     }
 
     private static FileTransferRegistry CreateRegistry(
-        long dailyBytesPerUser = 0, long bytesPerSecondPerUser = 0, TimeProvider? clock = null)
+        long dailyBytesPerUser = 0,
+        long bytesPerSecondPerUser = 0,
+        int concurrentTransfersPerUser = 16,
+        TimeProvider? clock = null)
     {
         // Limits default to off here so the pre-existing behavioural tests stay about
         // what they were about; the quota/bandwidth tests opt in explicitly.
@@ -237,6 +316,7 @@ public class FileTransferRegistryTests
         {
             DailyBytesPerUser = dailyBytesPerUser,
             BytesPerSecondPerUser = bytesPerSecondPerUser,
+            ConcurrentTransfersPerUser = concurrentTransfersPerUser,
         });
         return new FileTransferRegistry(options, clock ?? TimeProvider.System);
     }

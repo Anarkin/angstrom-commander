@@ -19,6 +19,16 @@ internal sealed class TransferLimitOptions
     /// Default 12.5 MB/s (100 Mbit/s) — invisible in normal use, decisive against abuse.
     /// </summary>
     public long BytesPerSecondPerUser { get; set; } = 12_500_000;
+
+    /// <summary>
+    /// Transfers one user may hold open at once. Default 16.
+    /// </summary>
+    /// <remarks>
+    /// This one is a memory bound rather than a cost bound: every live transfer holds a
+    /// bounded channel on the Server, so unlimited transfers is unlimited memory on a host
+    /// shared with everyone else's machines.
+    /// </remarks>
+    public int ConcurrentTransfersPerUser { get; set; } = 16;
 }
 
 /// <summary>

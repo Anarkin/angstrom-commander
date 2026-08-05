@@ -1,6 +1,7 @@
 using AngstromCommander.Protocol;
 using AngstromCommander.Server.Auth;
 using AngstromCommander.Server.Data;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
@@ -225,6 +226,18 @@ internal static class RelayEndpoints
                     return NoSuchMachine();
                 }
 
+                // Kestrel caps a request body at 30 MB by default, which would make every
+                // upload of an ordinary video fail — and fail as a *machine* fault, since the
+                // limit surfaces as an IOException the catch below reads as a silent Daemon.
+                // The body is streamed chunk by chunk and never buffered, and what one account
+                // may move is already bounded by the daily quota, the bandwidth cap and the
+                // concurrency ceiling, so size is the wrong place to say no a second time.
+                var bodySize = http.Features.Get<IHttpMaxRequestBodySizeFeature>();
+                if (bodySize is { IsReadOnly: false })
+                {
+                    bodySize.MaxRequestBodySize = null;
+                }
+
                 if (!registry.TryGetConnection(registrationId.ToString(), out var connectionId))
                 {
                     return MachineOffline();
@@ -263,12 +276,19 @@ internal static class RelayEndpoints
                             detail: accepted.Error, statusCode: StatusCodes.Status400BadRequest);
                     }
 
-                    transfers.TryGetChannel(transferId, out var channel);
+                    if (!transfers.TryGetChannel(transferId, out var channel))
+                    {
+                        // Only a disconnect can have taken it away between creating it and
+                        // here; without this check the pump dereferences null and answers 500.
+                        return MachineSilent();
+                    }
+
                     var bytesTransferred = await PumpRequestBodyAsync(
                         http.Request.Body, channel, transfers, transferId, cancellationToken);
 
                     // The receiver reports when the bytes are actually on disk.
-                    var failure = await transfers.Completion(transferId).WaitAsync(ChunkTimeout, cancellationToken);
+                    var failure = await transfers.WaitForCompletionAsync(
+                        transferId, ChunkTimeout, cancellationToken);
                     if (failure is not null)
                     {
                         return TypedResults.Problem(
@@ -398,7 +418,12 @@ internal static class RelayEndpoints
                             detail: accepted.Error, statusCode: StatusCodes.Status400BadRequest);
                     }
 
-                    var failure = await transfers.Completion(transferId).WaitAsync(ChunkTimeout, cancellationToken);
+                    // Both ends of a copy are Daemons, so no HTTP pump is watching the bytes go
+                    // by: this wait is the copy's only deadline, and it has to be a stall
+                    // deadline. A fixed cap here would fail every copy slower than one window
+                    // and leave the target holding a truncated file.
+                    var failure = await transfers.WaitForCompletionAsync(
+                        transferId, ChunkTimeout, cancellationToken);
                     if (failure is not null)
                     {
                         return TypedResults.Problem(

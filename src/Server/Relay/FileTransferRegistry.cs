@@ -26,7 +26,6 @@ internal enum CreateTransferResult
 internal sealed class FileTransferRegistry(IOptions<TransferLimitOptions> limits, TimeProvider clock)
 {
     private const int MaxBufferedChunks = 16;
-    private const int MaxTransfersPerUser = 16;
 
     private readonly ConcurrentDictionary<Guid, PendingTransfer> _transfers = new();
     private readonly ConcurrentDictionary<Guid, UserUsage> _usage = new();
@@ -47,7 +46,7 @@ internal sealed class FileTransferRegistry(IOptions<TransferLimitOptions> limits
         Guid userId, Guid? writerRegistrationId, Guid? readerRegistrationId, out Guid transferId)
     {
         transferId = Guid.Empty;
-        if (this._transfers.Count(entry => entry.Value.UserId == userId) >= MaxTransfersPerUser)
+        if (this._transfers.Count(entry => entry.Value.UserId == userId) >= limits.Value.ConcurrentTransfersPerUser)
         {
             return CreateTransferResult.TooManyConcurrent;
         }
@@ -129,6 +128,10 @@ internal sealed class FileTransferRegistry(IOptions<TransferLimitOptions> limits
             }
         }
 
+        // Something moved. Recorded after the quota check, so a chunk that broke the quota
+        // (and abandoned the transfer) never counts as progress.
+        transfer.Progress.Bump();
+
         if (wait > TimeSpan.Zero)
         {
             await Task.Delay(wait, clock, cancellationToken);
@@ -153,12 +156,43 @@ internal sealed class FileTransferRegistry(IOptions<TransferLimitOptions> limits
         return this.TryGet(transferId, static _ => true, out channel);
     }
 
-    /// <summary>Awaited by the HTTP side of an upload: the error the receiver reported, or null.</summary>
-    public Task<string?> Completion(Guid transferId)
+    /// <summary>
+    /// Awaited by the HTTP side of an upload or a machine-to-machine copy: the error the
+    /// receiver reported, or null when the bytes are on disk.
+    /// </summary>
+    /// <remarks>
+    /// The deadline is a stall deadline, not a duration cap: it restarts every time a chunk
+    /// moves, so a transfer only fails when it has gone silent for a whole window. Bounding
+    /// the *whole* copy at one window instead would kill every transfer slower than it — a
+    /// 300 MB copy over a home uplink — and, because the endpoint's cleanup ends the channel,
+    /// the receiving Daemon would read that as a clean end of file and keep the truncation.
+    /// </remarks>
+    public async Task<string?> WaitForCompletionAsync(
+        Guid transferId, TimeSpan stallTimeout, CancellationToken cancellationToken)
     {
-        return this._transfers.TryGetValue(transferId, out var transfer)
-            ? transfer.Completion.Task
-            : Task.FromResult<string?>("The transfer is no longer known.");
+        if (!this._transfers.TryGetValue(transferId, out var transfer))
+        {
+            return "The transfer is no longer known.";
+        }
+
+        var seen = transfer.Progress.Value;
+        while (true)
+        {
+            try
+            {
+                return await transfer.Completion.Task.WaitAsync(stallTimeout, cancellationToken);
+            }
+            catch (TimeoutException)
+            {
+                var moved = transfer.Progress.Value;
+                if (moved == seen)
+                {
+                    throw;
+                }
+
+                seen = moved;
+            }
+        }
     }
 
     /// <summary>Reported by the receiving Daemon once it finished writing (or failed).</summary>
@@ -173,13 +207,21 @@ internal sealed class FileTransferRegistry(IOptions<TransferLimitOptions> limits
         return transfer.Completion.TrySetResult(error);
     }
 
+    /// <summary>
+    /// Drops a transfer once its endpoint is done with it — on the way out of every transfer
+    /// endpoint, success or failure alike.
+    /// </summary>
+    /// <remarks>
+    /// The channel is error-completed rather than completed, for the same reason
+    /// <see cref="AbandonFor"/> is: a plain completion reads to the receiving Daemon as a
+    /// clean end of file, so an endpoint bailing out early — a stall, a cancelled request —
+    /// would leave a truncated file behind reported as a whole one. On the success path this
+    /// changes nothing: whoever wrote the last chunk has already completed the channel, and
+    /// completing a completed channel is a no-op.
+    /// </remarks>
     public void Remove(Guid transferId)
     {
-        if (this._transfers.TryRemove(transferId, out var transfer))
-        {
-            transfer.Channel.Writer.TryComplete();
-            transfer.Completion.TrySetResult("The transfer was abandoned.");
-        }
+        this.Abandon(transferId, "The transfer ended before it was complete.");
     }
 
     /// <summary>
@@ -244,6 +286,25 @@ internal sealed class FileTransferRegistry(IOptions<TransferLimitOptions> limits
     {
         public TaskCompletionSource<string?> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ProgressMarker Progress { get; } = new();
+    }
+
+    /// <summary>
+    /// How many chunks a transfer has moved. Never read as a quantity — only compared with
+    /// its own earlier value to answer "did anything move while I was waiting", which is what
+    /// separates a slow transfer from a dead one.
+    /// </summary>
+    private sealed class ProgressMarker
+    {
+        private long _chunks;
+
+        public long Value => Interlocked.Read(ref this._chunks);
+
+        public void Bump()
+        {
+            Interlocked.Increment(ref this._chunks);
+        }
     }
 
     /// <summary>Locked on itself; per-replica like everything else here.</summary>

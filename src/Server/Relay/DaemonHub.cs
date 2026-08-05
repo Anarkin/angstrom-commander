@@ -113,8 +113,17 @@ internal sealed class DaemonHub(IDaemonConnectionRegistry registry, FileTransfer
         {
             registry.Unregister(registrationId.Value.ToString(), this.Context.ConnectionId);
 
-            // Whatever this machine was sending or receiving is not going to finish.
-            transfers.AbandonFor(registrationId.Value);
+            // Whatever this machine was sending or receiving is not going to finish — unless a
+            // reconnect got here first. This callback is not ordered against the new connection's
+            // OnConnectedAsync, so after a brief socket blip the entry may already belong to a
+            // live connection, and abandoning by registration id alone would kill the transfers
+            // that connection has healthily started. Anything stranded on the dead socket still
+            // ends: the per-chunk deadlines are what catch it.
+            if (!registry.TryGetConnection(registrationId.Value.ToString(), out _))
+            {
+                transfers.AbandonFor(registrationId.Value);
+            }
+
             await this.TouchLastSeenAsync(registrationId.Value);
         }
 
