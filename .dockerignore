@@ -10,3 +10,15 @@
 .git/
 .github/
 *.md
+
+# A Daemon's state directory holds the private key that IS that machine's identity. Both
+# Dockerfiles copy the whole tree into the build stage, so without this every local build
+# pulls real machine keys into the build context and its layer cache — they never reach the
+# final image, but a cache export or a pushed build stage would carry them out.
+src/Daemon/state*/
+
+# azd's per-environment state, including values that should not be baked into an image.
+.azure/
+
+# Terraform plan output can embed state values.
+*.tfplan

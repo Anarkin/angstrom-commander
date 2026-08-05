@@ -4,6 +4,16 @@ root = true
 [*]
 indent_style = space
 
+# Matches .gitattributes (`* text=auto eol=lf`), and has to: without it `dotnet format`
+# follows the platform — CRLF on a Windows dev machine, LF on CI's ubuntu runner — so the
+# formatting gate would pass or fail depending on who ran it, and a Windows-formatted file
+# would arrive with the line endings the repo says it must not have.
+end_of_line = lf
+
+# The exceptions .gitattributes carves out, mirrored so editors agree with Git.
+[*.{bat,cmd,ps1}]
+end_of_line = crlf
+
 # Xml files
 [*.xml]
 indent_size = 2
