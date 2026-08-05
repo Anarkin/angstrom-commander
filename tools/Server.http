@@ -194,6 +194,26 @@ Content-Type: application/json
 GET {{server}}/api/daemons
 Authorization: Bearer {{pat}}
 
+### The scheme is case-insensitive, as RFC 7235 says it is — this is the same call, accepted
+POST {{server}}/mcp
+Authorization: bearer {{pat}}
+Accept: application/json, text/event-stream
+Content-Type: application/json
+
+{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}
+
+### 12. Revoke the token → 204. Needs a user token: a PAT can never mint or revoke PATs
+DELETE {{server}}/api/pats/{{createPat.response.body.$.id}}
+Authorization: Bearer {{token}}
+
+### Revocation is instant — no expiry to wait out. Send #11 again to watch it die → 401
+POST {{server}}/mcp
+Authorization: Bearer {{pat}}
+Accept: application/json, text/event-stream
+Content-Type: application/json
+
+{"jsonrpc":"2.0","id":4,"method":"tools/list","params":{}}
+
 # Not included: /api/enrollment/code, /api/enrollment/status and /api/daemon-auth/* —
 # those are called by the Daemon itself (the token one needs an ECDsa signature you
 # can't produce in an .http file). Watch them happen in: docker compose logs daemon
