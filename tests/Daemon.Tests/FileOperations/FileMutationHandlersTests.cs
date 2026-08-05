@@ -137,16 +137,20 @@ public sealed class FileMutationHandlersTests : IDisposable
         var target = Directory.CreateDirectory(Path.Combine(this._writableRoot, "real")).FullName;
         File.WriteAllText(Path.Combine(target, "precious.txt"), "keep me");
         var link = Path.Combine(this._writableRoot, "link");
+        bool created;
         try
         {
             Directory.CreateSymbolicLink(link, target);
+            created = true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Symlink creation needs privileges this runner does not have; the semantics
-            // are still covered by the ReparsePoint branch, just not exercised here.
-            return;
+            created = false;
         }
+
+        // Symlink creation needs privileges this runner does not have; skip visibly rather
+        // than pass vacuously, so the untested guarantee shows up in the results.
+        Assert.SkipUnless(created, "Symbolic link creation is not permitted on this machine.");
 
         var response = new DeleteEntryHandler(this._sandbox).Handle(new DeleteEntryRequest(link));
 

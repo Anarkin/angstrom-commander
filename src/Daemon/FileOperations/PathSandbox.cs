@@ -15,6 +15,10 @@ internal sealed class PathSandbox
 
     private static readonly char[] Separators = [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar];
 
+    // Linux caps one resolution at 40 link follows (ELOOP); the same budget here bounds any
+    // chain — or cycle — a request can send the resolver through, and running out refuses.
+    private const int MaxLinkFollows = 40;
+
     private readonly IReadOnlyList<AllowedRoot> _allowedRoots;
     private readonly string? _neverShared;
 
@@ -34,9 +38,13 @@ internal sealed class PathSandbox
         this._allowedRoots = allowedRoots
             .Select(static root => new AllowedRoot
             {
-                // A root we cannot resolve is a configuration error: keep its canonical form so
-                // startup still fails loudly on a malformed path rather than silently sharing it.
-                Path = TryMakeReal(root.Path, out var real) ? real : Path.GetFullPath(root.Path),
+                // A root we cannot resolve is a configuration error: fail startup loudly rather
+                // than share a path the sandbox cannot vouch for. A root that merely does not
+                // exist yet still resolves — a missing component is not a link.
+                Path = TryMakeReal(root.Path, out var real)
+                    ? real
+                    : throw new InvalidOperationException(
+                        $"Allowed root '{root.Path}' cannot be resolved and will not be shared."),
                 Writable = root.Writable,
             })
             .ToList();
@@ -153,10 +161,56 @@ internal sealed class PathSandbox
     {
         real = string.Empty;
 
+        var remaining = new Stack<string>();
+        if (!TrySpliceCanonical(path, basePath: null, remaining, out var resolved))
+        {
+            return false;
+        }
+
+        // Segment by segment from the root down: a link anywhere along the path moves the real
+        // location, not just a link at the end. A followed link's target is spliced back into
+        // the walk and re-walked the same way, one hop at a time — the target string can itself
+        // run through further links, so trusting it as-is would let one link launder another's
+        // escape. The hop budget turns a chain too long — or circular — into a refusal.
+        var followsLeft = MaxLinkFollows;
+        while (remaining.Count > 0)
+        {
+            var candidate = Path.Combine(resolved, remaining.Pop());
+            if (!TryGetLinkTarget(candidate, out var linkTarget))
+            {
+                return false;
+            }
+
+            if (linkTarget is null)
+            {
+                resolved = candidate;
+                continue;
+            }
+
+            if (--followsLeft < 0 || !TrySpliceCanonical(linkTarget, basePath: resolved, remaining, out resolved))
+            {
+                return false;
+            }
+        }
+
+        real = Path.TrimEndingDirectorySeparator(resolved);
+        return true;
+    }
+
+    /// <summary>
+    /// Canonicalizes a path (a relative one against <paramref name="basePath"/> — a link target
+    /// is relative to the directory holding the link) and pushes its segments onto the walk in
+    /// order, leaving <paramref name="resolved"/> back at the file-system root.
+    /// </summary>
+    private static bool TrySpliceCanonical(string path, string? basePath, Stack<string> remaining, out string resolved)
+    {
+        resolved = string.Empty;
+
         string canonical;
         try
         {
-            canonical = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+            canonical = Path.TrimEndingDirectorySeparator(
+                basePath is null ? Path.GetFullPath(path) : Path.GetFullPath(path, basePath));
         }
         catch (Exception ex) when (ex is ArgumentException or PathTooLongException or NotSupportedException)
         {
@@ -169,53 +223,34 @@ internal sealed class PathSandbox
             return false;
         }
 
-        // Segment by segment from the root down: a link anywhere along the path moves the real
-        // location, not just a link at the end.
-        var resolved = pathRoot;
-        foreach (var segment in canonical[pathRoot.Length..].Split(Separators, StringSplitOptions.RemoveEmptyEntries))
+        var segments = canonical[pathRoot.Length..].Split(Separators, StringSplitOptions.RemoveEmptyEntries);
+        for (var i = segments.Length - 1; i >= 0; i--)
         {
-            resolved = Path.Combine(resolved, segment);
-            if (!TryFollowLink(resolved, out var target))
-            {
-                return false;
-            }
-
-            resolved = target;
+            remaining.Push(segments[i]);
         }
 
-        real = Path.TrimEndingDirectorySeparator(resolved);
+        resolved = pathRoot;
         return true;
     }
 
     /// <summary>
-    /// Follows one path component if it is a link, to the end of any chain of links. A component
-    /// that does not exist is not a link and stays as it is — an upload names a file that is not
-    /// there yet, and its parents have already been resolved by the time we reach it.
+    /// Reads a single link hop. A null target means the component is not a link — including one
+    /// that does not exist yet, which is the normal case for the file an upload is about to
+    /// create (its parents were already resolved by the time the walk reaches it). A dangling
+    /// link still yields its target, because it still decides where a write through it lands.
     /// </summary>
-    private static bool TryFollowLink(string path, out string target)
+    private static bool TryGetLinkTarget(string path, out string? linkTarget)
     {
-        target = path;
+        linkTarget = null;
         try
         {
             FileSystemInfo entry = Directory.Exists(path) ? new DirectoryInfo(path) : new FileInfo(path);
-            if (entry.LinkTarget is null)
-            {
-                // Not a link — including a component that does not exist yet, which is the normal
-                // case for the file an upload is about to create.
-                return true;
-            }
-
-            // A dangling link still decides where a write through it would land, so when the chain
-            // cannot be walked to the end, fall back to the one hop we can read.
-            var resolved = entry.ResolveLinkTarget(returnFinalTarget: true)?.FullName
-                ?? Path.GetFullPath(entry.LinkTarget, Path.GetDirectoryName(path) ?? string.Empty);
-
-            target = Path.TrimEndingDirectorySeparator(resolved);
+            linkTarget = entry.LinkTarget;
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
-            // A circular chain, or one we are not allowed to read: refuse rather than guess.
+            // A link we are not allowed to read: refuse rather than guess.
             return false;
         }
     }

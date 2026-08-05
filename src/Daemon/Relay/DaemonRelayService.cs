@@ -235,13 +235,9 @@ internal sealed partial class DaemonRelayService(
         string? error = null;
         try
         {
-            await using var file = UploadFileHandler.OpenForWriting(resolvedPath, request.Overwrite);
             var chunks = connection.StreamAsync<byte[]>(
                 ServerHubMethods.DownloadFileChunks, transferId, cancellationToken);
-            await foreach (var chunk in chunks.WithCancellation(cancellationToken))
-            {
-                await file.WriteAsync(chunk, cancellationToken);
-            }
+            await ReceiveIntoAsync(resolvedPath, request.Overwrite, transferId, chunks, logger, cancellationToken);
         }
         catch (Exception ex) when (ex is HubException or IOException or UnauthorizedAccessException or InvalidOperationException or OperationCanceledException)
         {
@@ -257,6 +253,56 @@ internal sealed partial class DaemonRelayService(
         catch (Exception ex) when (ex is HubException or IOException or InvalidOperationException or OperationCanceledException)
         {
             LogTransferAborted(logger, transferId, ex);
+        }
+    }
+
+    /// <summary>
+    /// Streams incoming chunks into a temporary sibling of the destination and moves it into
+    /// place only once the stream has completed, so a transfer that dies mid-way never destroys
+    /// or half-writes what was there. Any failure — including cancellation — deletes the
+    /// temporary file and leaves the destination exactly as it was.
+    /// </summary>
+    internal static async Task ReceiveIntoAsync(
+        string destinationPath,
+        bool overwrite,
+        Guid transferId,
+        IAsyncEnumerable<byte[]> chunks,
+        ILogger logger,
+        CancellationToken cancellationToken)
+    {
+        // The temporary file sits in the destination's own directory — already sandbox-approved
+        // by the time this runs, and on the same volume so the final move is a rename, not a
+        // copy. The system temp directory would guarantee neither. The transfer id keeps the
+        // name collision-free, and CreateNew makes an unexpected collision fail loudly.
+        var directory = Path.GetDirectoryName(destinationPath)
+            ?? throw new InvalidOperationException("The upload destination has no containing directory.");
+        var tempPath = Path.Combine(directory, $"{Path.GetFileName(destinationPath)}.{transferId:N}.partial");
+        try
+        {
+            await using (var file = UploadFileHandler.OpenForWriting(tempPath, overwrite: false))
+            {
+                await foreach (var chunk in chunks.WithCancellation(cancellationToken))
+                {
+                    await file.WriteAsync(chunk, cancellationToken);
+                }
+            }
+
+            // Writing to a temporary file moved the "do not clobber" enforcement off CreateNew;
+            // the move takes it over — without consent it refuses an existing destination.
+            File.Move(tempPath, destinationPath, overwrite);
+        }
+        finally
+        {
+            // No-op after a successful move (the temp file is the destination now); on every
+            // other path this is what keeps a failed transfer from littering the share.
+            try
+            {
+                File.Delete(tempPath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                LogPartialFileLeftBehind(logger, tempPath, ex);
+            }
         }
     }
 
@@ -320,6 +366,9 @@ internal sealed partial class DaemonRelayService(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "File transfer {TransferId} aborted.")]
     private static partial void LogTransferAborted(ILogger logger, Guid transferId, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not delete the partial transfer file {TempPath}.")]
+    private static partial void LogPartialFileLeftBehind(ILogger logger, string tempPath, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "This machine was unpaired on the Server; discarding the registration and starting fresh enrollment.")]
     private static partial void LogRevoked(ILogger logger);

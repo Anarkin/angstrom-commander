@@ -66,6 +66,28 @@ public class PathSandboxTests
     }
 
     [Fact]
+    public void RefusesToStartWithARootItCannotResolve()
+    {
+        // A root the sandbox cannot vouch for must fail startup loudly — the alternative is
+        // silently sharing its lexical form with link resolution never applied.
+        Assert.Throws<InvalidOperationException>(
+            static () => new PathSandbox([new AllowedRoot { Path = "\0", Writable = false }]));
+    }
+
+    [Fact]
+    public void StartsWithARootThatDoesNotExistYet()
+    {
+        // Missing is not malformed: a configured root may be created after startup, and a
+        // component that does not exist is not a link, so it still resolves.
+        var missing = Path.Combine(Path.GetTempPath(), "ac-root-not-created-yet");
+        Assert.False(Directory.Exists(missing));
+
+        var sandbox = new PathSandbox([new AllowedRoot { Path = missing }]);
+
+        Assert.True(sandbox.TryResolveForRead(Path.Combine(missing, "file.txt"), out _));
+    }
+
+    [Fact]
     public void SharingTheWholeFileSystemReachesPathsUnderIt()
     {
         // A root is its own prefix boundary, but a file-system root already ends in a separator
@@ -107,11 +129,7 @@ public class PathSandboxTests
     public void BlocksReadsThroughASymlinkLeavingTheRoot()
     {
         using var layout = new LinkedLayout();
-        if (layout.Unsupported)
-        {
-            // No symbolic links and no junctions available on this machine.
-            return;
-        }
+        Assert.SkipWhen(layout.Unsupported, "No symbolic links and no junctions available on this machine.");
 
         // The lexical path stays inside the root the whole way; only the link's target leaves it.
         Assert.False(layout.Sandbox.TryResolveForRead(Path.Combine(layout.Root, "escape", "secret.txt"), out _));
@@ -121,11 +139,7 @@ public class PathSandboxTests
     public void BlocksWritesThroughASymlinkLeavingTheRoot()
     {
         using var layout = new LinkedLayout(writable: true);
-        if (layout.Unsupported)
-        {
-            // No symbolic links and no junctions available on this machine.
-            return;
-        }
+        Assert.SkipWhen(layout.Unsupported, "No symbolic links and no junctions available on this machine.");
 
         Assert.False(layout.Sandbox.TryResolveForWrite(Path.Combine(layout.Root, "escape", "planted.txt"), out _));
     }
@@ -134,11 +148,7 @@ public class PathSandboxTests
     public void AllowsASymlinkThatStaysInsideTheRoot()
     {
         using var layout = new LinkedLayout();
-        if (layout.Unsupported)
-        {
-            // No symbolic links and no junctions available on this machine.
-            return;
-        }
+        Assert.SkipWhen(layout.Unsupported, "No symbolic links and no junctions available on this machine.");
 
         // Resolving links must not turn into "no links allowed" — one pointing back inside the
         // shared folder is exactly as legitimate as the folder itself.
@@ -146,6 +156,65 @@ public class PathSandboxTests
 
         Assert.True(allowed);
         Assert.Equal(Path.Combine(layout.Root, "shared", "kept.txt"), resolved);
+    }
+
+    [Fact]
+    public void BlocksALinkWhoseTargetPathRunsThroughAnotherLink()
+    {
+        // The `ln -s /etc /share/sub; ln -s /share/sub/passwd /share/hop` escape: hop's target
+        // string lies lexically inside the root, but its "sub" component is itself a link that
+        // leaves it. Following the chain without re-walking the returned target trusts that
+        // string and lets the kernel do the escaping at open time.
+        var baseDir = Directory.CreateTempSubdirectory("ac-sandbox-hops-");
+        try
+        {
+            var root = Path.Combine(baseDir.FullName, "root");
+            var outside = Path.Combine(baseDir.FullName, "outside");
+            Directory.CreateDirectory(root);
+            Directory.CreateDirectory(Path.Combine(outside, "loot"));
+            File.WriteAllText(Path.Combine(outside, "loot", "secret.txt"), "secret");
+
+            var created =
+                TryCreateDirectoryLink(Path.Combine(root, "sub"), outside)
+                && TryCreateDirectoryLink(Path.Combine(root, "hop"), Path.Combine(root, "sub", "loot"));
+            Assert.SkipUnless(created, "No symbolic links and no junctions available on this machine.");
+
+            var sandbox = new PathSandbox([new AllowedRoot { Path = root, Writable = true }]);
+
+            Assert.False(sandbox.TryResolveForRead(Path.Combine(root, "hop"), out _));
+            Assert.False(sandbox.TryResolveForRead(Path.Combine(root, "hop", "secret.txt"), out _));
+            Assert.False(sandbox.TryResolveForWrite(Path.Combine(root, "hop", "planted.txt"), out _));
+        }
+        finally
+        {
+            DeleteLinkedTree(baseDir, Path.Combine(baseDir.FullName, "root", "sub"), Path.Combine(baseDir.FullName, "root", "hop"));
+        }
+    }
+
+    [Fact]
+    public void RefusesACircularLinkChain()
+    {
+        // Two links pointing at each other must exhaust the hop budget and be refused —
+        // never spin the resolver forever.
+        var baseDir = Directory.CreateTempSubdirectory("ac-sandbox-cycle-");
+        try
+        {
+            var root = Path.Combine(baseDir.FullName, "root");
+            Directory.CreateDirectory(root);
+            var first = Path.Combine(root, "first");
+            var second = Path.Combine(root, "second");
+
+            var created = TryCreateDirectoryLink(first, second) && TryCreateDirectoryLink(second, first);
+            Assert.SkipUnless(created, "No symbolic links and no junctions available on this machine.");
+
+            var sandbox = new PathSandbox([new AllowedRoot { Path = root, Writable = false }]);
+
+            Assert.False(sandbox.TryResolveForRead(Path.Combine(first, "file.txt"), out _));
+        }
+        finally
+        {
+            DeleteLinkedTree(baseDir, Path.Combine(baseDir.FullName, "root", "first"), Path.Combine(baseDir.FullName, "root", "second"));
+        }
     }
 
     [Fact]
@@ -183,6 +252,61 @@ public class PathSandboxTests
     }
 
     /// <summary>
+    /// Deletes the given links first (a link must never take the directory it points at with
+    /// it, and a dangling one fails Exists checks), then the whole temp tree.
+    /// </summary>
+    private static void DeleteLinkedTree(DirectoryInfo baseDir, params string[] links)
+    {
+        foreach (var link in links)
+        {
+            try
+            {
+                Directory.Delete(link);
+            }
+            catch (Exception ex) when (ex is IOException or DirectoryNotFoundException or UnauthorizedAccessException)
+            {
+                // Never created (unsupported machine) or already gone; the recursive delete
+                // below still sweeps whatever exists.
+            }
+        }
+
+        baseDir.Delete(recursive: true);
+    }
+
+    private static bool TryCreateDirectoryLink(string link, string target)
+    {
+        try
+        {
+            Directory.CreateSymbolicLink(link, target);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Windows only permits symbolic links under Developer Mode or elevation. A junction
+            // is the same kind of reparse point as far as the sandbox is concerned and needs
+            // neither, so the escape still gets covered on a plain Windows dev machine.
+            return OperatingSystem.IsWindows() && TryCreateJunction(link, target);
+        }
+    }
+
+    private static bool TryCreateJunction(string link, string target)
+    {
+        using var mklink = Process.Start(new ProcessStartInfo("cmd.exe", ["/c", "mklink", "/J", link, target])
+        {
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        });
+        if (mklink is null)
+        {
+            return false;
+        }
+
+        mklink.WaitForExit();
+        return mklink.ExitCode == 0;
+    }
+
+    /// <summary>
     /// A shared root holding two links: one to a directory outside it, one to a sibling inside it.
     /// </summary>
     private sealed class LinkedLayout : IDisposable
@@ -214,51 +338,7 @@ public class PathSandboxTests
 
         public void Dispose()
         {
-            // Drop the links first: a recursive delete refuses to descend into a reparse point,
-            // and deleting the link itself must not take the directory it points at with it.
-            foreach (var link in new[] { "escape", "inside" })
-            {
-                var path = Path.Combine(this.Root, link);
-                if (Directory.Exists(path))
-                {
-                    Directory.Delete(path);
-                }
-            }
-
-            this._base.Delete(recursive: true);
-        }
-
-        private static bool TryCreateDirectoryLink(string link, string target)
-        {
-            try
-            {
-                Directory.CreateSymbolicLink(link, target);
-                return true;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // Windows only permits symbolic links under Developer Mode or elevation. A junction
-                // is the same kind of reparse point as far as the sandbox is concerned and needs
-                // neither, so the escape still gets covered on a plain Windows dev machine.
-                return OperatingSystem.IsWindows() && TryCreateJunction(link, target);
-            }
-        }
-
-        private static bool TryCreateJunction(string link, string target)
-        {
-            using var mklink = Process.Start(new ProcessStartInfo("cmd.exe", ["/c", "mklink", "/J", link, target])
-            {
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            });
-            if (mklink is null)
-            {
-                return false;
-            }
-
-            mklink.WaitForExit();
-            return mklink.ExitCode == 0;
+            DeleteLinkedTree(this._base, Path.Combine(this.Root, "escape"), Path.Combine(this.Root, "inside"));
         }
     }
 }
