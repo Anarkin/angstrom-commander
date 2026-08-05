@@ -37,7 +37,13 @@ jobs:
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_USE_OIDC: "true"
     steps:
+      # The commit whose CI went green, not whatever main points at now. Without the ref,
+      # checkout takes the branch's current HEAD: push B landing while A's CI is still running
+      # means A's success triggers a deploy of B, ungated. Empty on workflow_dispatch, where
+      # checkout's default (the dispatched ref) is what is wanted.
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - uses: Azure/setup-azd@v2
 

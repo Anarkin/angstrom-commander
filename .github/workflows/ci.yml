@@ -31,6 +31,18 @@ jobs:
       - name: Test with coverage
         run: dotnet test --configuration Release --no-build --collect:"XPlat Code Coverage"
 
+      # Collected coverage that nothing keeps is coverage nobody can read: the guardrail said
+      # "collected on every test run" and the reports were being thrown away with the runner.
+      # Kept as an artifact rather than gated on a threshold — a number to look at when a change
+      # warrants it, not a gate that turns into a ritual of nudging it back over the line.
+      - name: Keep the coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-coverage
+          path: "**/TestResults/**/coverage.cobertura.xml"
+          if-no-files-found: error
+
       # The OpenAPI contract is a build output; the build above regenerated it.
       - name: Verify the committed OpenAPI contract is current
         run: git diff --exit-code -- openapi/
