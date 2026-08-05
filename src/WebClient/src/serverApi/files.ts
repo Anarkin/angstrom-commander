@@ -37,9 +37,14 @@ export async function getTransferUsage(): Promise<TransferUsage> {
     return await sendForJson<TransferUsage>("/api/transfers/usage");
 }
 
-export async function listDirectory(registrationId: string, path: string): Promise<DirectoryEntry[]> {
+/** A pane's listing; pass a signal so a superseded navigation stops the request it started. */
+export async function listDirectory(
+    registrationId: string,
+    path: string,
+    signal?: AbortSignal,
+): Promise<DirectoryEntry[]> {
     const query = new URLSearchParams({ path });
-    return await sendForJson<DirectoryEntry[]>(`/api/daemons/${registrationId}/list?${query.toString()}`);
+    return await sendForJson<DirectoryEntry[]>(`/api/daemons/${registrationId}/list?${query.toString()}`, { signal });
 }
 
 export interface DownloadedFile {

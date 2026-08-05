@@ -57,6 +57,17 @@ export function FilePane({
 
     const { registrationId, path } = state;
 
+    // The path box is a draft until the user commits it with Enter or Go. Writing every keystroke
+    // into the pane's path would list a directory per character — each half-typed path a sandbox
+    // refusal that empties the table and, on a deployed stamp, walks into the rate limit.
+    const [draftPath, setDraftPath] = useState(path);
+    const [shownPath, setShownPath] = useState(path);
+    if (shownPath !== path) {
+        // Navigation from anywhere else (a root pick, Up, opening a directory) wins over a draft.
+        setShownPath(path);
+        setDraftPath(path);
+    }
+
     // What the machine shares: fetched on machine pick, and the first root becomes the
     // starting path — nobody should have to guess what a sandbox would accept.
     useEffect(() => {
@@ -73,7 +84,9 @@ export function FilePane({
 
                 setRoots(shared);
                 const first = shared[0];
-                if (first !== undefined) {
+                // Only seed a pane that has nowhere to be: a pane remounted with a path already
+                // chosen (returning from Settings) must not be sent back to the first root.
+                if (first !== undefined && path === "") {
                     onStateChange({ registrationId, path: first.path });
                 }
             })
@@ -86,7 +99,8 @@ export function FilePane({
         return () => {
             active = false;
         };
-        // Only a machine change should re-ask; the path deliberately stays out of this list.
+        // Only a machine change should re-ask; the path is read for the seeding decision above
+        // but deliberately stays out of this list.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [registrationId, onFailure]);
 
@@ -97,8 +111,11 @@ export function FilePane({
             return;
         }
 
+        // `active` decides whether a late answer may touch state; the controller stops the
+        // request itself, so a superseded listing does not keep a relay round trip alive.
         let active = true;
-        listDirectory(registrationId, path)
+        const cancellation = new AbortController();
+        listDirectory(registrationId, path, cancellation.signal)
             .then((listed) => {
                 if (!active) {
                     return;
@@ -122,6 +139,7 @@ export function FilePane({
 
         return () => {
             active = false;
+            cancellation.abort();
         };
     }, [registrationId, path, reloadToken, localReload, onFailure, onEntriesLoaded]);
 
@@ -136,6 +154,19 @@ export function FilePane({
             onStateChange({ registrationId, path: joinPath(path, entry.name) });
         } else {
             onSelect(entry);
+        }
+    }
+
+    /** Enter or Go: the only moments a typed path becomes the pane's location. */
+    function goToDraftPath() {
+        onSelect(null);
+        setMessage(null);
+        if (draftPath === path) {
+            // Already there, so nothing would change and the listing effect would not rerun:
+            // treat it as the refresh the user just asked for.
+            reload();
+        } else {
+            onStateChange({ registrationId, path: draftPath });
         }
     }
 
@@ -161,7 +192,7 @@ export function FilePane({
     }
 
     function newFolder() {
-        if (registrationId === null) {
+        if (registrationId === null || path === "") {
             return;
         }
 
@@ -229,12 +260,15 @@ export function FilePane({
     }
 
     function upload(file: File) {
-        if (registrationId === null) {
+        // Without a settled path every joinPath below lands at the filesystem root of whatever
+        // this machine shares — a place the user never looked at, let alone chose.
+        if (registrationId === null || path === "") {
             return;
         }
 
         // Replacing a file is a decision the user gets to make: overwrite is only requested for a
-        // name already in this directory, and only after they say so.
+        // name already in this directory, and only after they say so. A directory that has not
+        // finished listing counts as "not replacing" — the Server refuses rather than clobbers.
         const replacing = entries?.some((entry) => entry.name === file.name && !entry.isDirectory) ?? false;
         if (replacing && !window.confirm(`${file.name} already exists here. Replace it?`)) {
             return;
@@ -252,7 +286,10 @@ export function FilePane({
             .finally(() => setBusy(false));
     }
 
-    const loading = registrationId !== null && entries === null && listError === null;
+    // Roots that came back empty are an answer, not a wait: with no shared folder the path stays
+    // empty, the listing never runs, and "working…" would spin for as long as the pane is open.
+    const located = registrationId !== null && path !== "";
+    const loading = registrationId !== null && entries === null && listError === null && (roots === null || located);
 
     return (
         <section className="card pane">
@@ -268,6 +305,10 @@ export function FilePane({
                     onChange={(event) => {
                         onSelect(null);
                         setEntries(null);
+                        // The other pane has to forget this listing too: entries it still held
+                        // would otherwise decide whether a copy replaces a file on a machine
+                        // they no longer describe.
+                        onEntriesLoaded([]);
                         setRoots(null);
                         setMessage(null);
                         // The path resets with the machine: the roots fetch fills it in.
@@ -320,19 +361,21 @@ export function FilePane({
                 </button>
                 <input
                     className="path"
-                    value={path}
+                    value={draftPath}
                     aria-label={`${title}: path`}
-                    onChange={(event) => onStateChange({ registrationId, path: event.target.value })}
+                    onChange={(event) => setDraftPath(event.target.value)}
                     onKeyDown={(event) => {
                         if (event.key === "Enter") {
-                            reload();
+                            goToDraftPath();
+                        } else if (event.key === "Escape") {
+                            setDraftPath(path);
                         }
                     }}
                 />
-                <button type="button" disabled={registrationId === null} onClick={reload}>
+                <button type="button" disabled={registrationId === null} onClick={goToDraftPath}>
                     Go
                 </button>
-                <button type="button" disabled={registrationId === null || busy} onClick={newFolder}>
+                <button type="button" disabled={!located || busy} onClick={newFolder}>
                     New folder
                 </button>
             </div>
@@ -356,7 +399,21 @@ export function FilePane({
                             <tr
                                 key={entry.name}
                                 className={selectedEntry?.name === entry.name ? "selected" : undefined}
+                                tabIndex={0}
                                 onClick={() => open(entry)}
+                                onKeyDown={(event) => {
+                                    // Only the row's own keys: Enter and Space on the buttons
+                                    // inside it belong to those buttons.
+                                    if (event.target !== event.currentTarget) {
+                                        return;
+                                    }
+
+                                    if (event.key === "Enter" || event.key === " ") {
+                                        // Space would scroll the page out from under the pane.
+                                        event.preventDefault();
+                                        open(entry);
+                                    }
+                                }}
                             >
                                 <td>
                                     {entry.isDirectory ? "📁" : "📄"} {entry.name}
@@ -410,7 +467,7 @@ export function FilePane({
                     type="file"
                     ref={fileInput}
                     aria-label={`${title}: upload a file`}
-                    disabled={registrationId === null}
+                    disabled={!located}
                     onChange={(event) => {
                         const file = event.target.files?.[0];
                         if (file !== undefined) {

@@ -14,7 +14,7 @@ import { useSession } from "./useSession";
 const emptyPane: PaneState = { registrationId: null, path: "" };
 
 function App() {
-    const { signedIn, signIn, signOut, handleFailure } = useSession();
+    const { signedIn, signIn, signOut, handleFailure, endedMessage } = useSession();
     const [machines, setMachines] = useState<Machine[]>([]);
     const [left, setLeft] = useState<PaneState>(emptyPane);
     const [right, setRight] = useState<PaneState>(emptyPane);
@@ -53,6 +53,12 @@ function App() {
             return;
         }
 
+        // A pane that has not settled on a path yet would send the file to `/name`: the root of
+        // whatever the target machine shares, which is nowhere the user pointed at.
+        if (source.path === "" || target.path === "") {
+            return;
+        }
+
         // Overwriting is the user's call, not a default: only ask the Server to replace a file
         // when there is one to replace and they have said so.
         const replacing = targetEntries.some((existing) => existing.name === entry.name && !existing.isDirectory);
@@ -86,13 +92,17 @@ function App() {
             <main>
                 <h1>Angstrom Commander</h1>
                 <p className="muted">All your machines, an ångström apart.</p>
-                <SignInScreen onSignedIn={signIn} onFailure={handleFailure} />
+                <SignInScreen onSignedIn={signIn} onFailure={handleFailure} notice={endedMessage} />
             </main>
         );
     }
 
-    const canCopyRight = leftSelection !== null && left.registrationId !== null && right.registrationId !== null;
-    const canCopyLeft = rightSelection !== null && left.registrationId !== null && right.registrationId !== null;
+    // Both panes must be somewhere real: a machine alone is not enough, because a pane whose
+    // roots have not resolved still has an empty path and no listing to compare names against.
+    const panesReady =
+        left.registrationId !== null && left.path !== "" && right.registrationId !== null && right.path !== "";
+    const canCopyRight = panesReady && leftSelection !== null;
+    const canCopyLeft = panesReady && rightSelection !== null;
 
     return (
         <main className="wide">
@@ -116,43 +126,50 @@ function App() {
                 </>
             )}
 
-            <div className="panes" hidden={view !== "commander"}>
-                <FilePane
-                    title="Left"
-                    machines={machines}
-                    state={left}
-                    onStateChange={setLeft}
-                    selectedEntry={leftSelection}
-                    onSelect={setLeftSelection}
-                    onFailure={handleFailure}
-                    reloadToken={leftReload}
-                    onChanged={() => setRightReload((token) => token + 1)}
-                    onEntriesLoaded={setLeftEntries}
-                />
-                <FilePane
-                    title="Right"
-                    machines={machines}
-                    state={right}
-                    onStateChange={setRight}
-                    selectedEntry={rightSelection}
-                    onSelect={setRightSelection}
-                    onFailure={handleFailure}
-                    reloadToken={rightReload}
-                    onChanged={() => setLeftReload((token) => token + 1)}
-                    onEntriesLoaded={setRightEntries}
-                />
-            </div>
+            {/* Rendered only in the commander view: `hidden` cannot hide these, because the
+                author styles for .panes and .row set `display` and outrank the UA stylesheet's
+                `[hidden] { display: none }` — the file manager stayed live under Settings. */}
+            {view === "commander" && (
+                <>
+                    <div className="panes">
+                        <FilePane
+                            title="Left"
+                            machines={machines}
+                            state={left}
+                            onStateChange={setLeft}
+                            selectedEntry={leftSelection}
+                            onSelect={setLeftSelection}
+                            onFailure={handleFailure}
+                            reloadToken={leftReload}
+                            onChanged={() => setRightReload((token) => token + 1)}
+                            onEntriesLoaded={setLeftEntries}
+                        />
+                        <FilePane
+                            title="Right"
+                            machines={machines}
+                            state={right}
+                            onStateChange={setRight}
+                            selectedEntry={rightSelection}
+                            onSelect={setRightSelection}
+                            onFailure={handleFailure}
+                            reloadToken={rightReload}
+                            onChanged={() => setLeftReload((token) => token + 1)}
+                            onEntriesLoaded={setRightEntries}
+                        />
+                    </div>
 
-            <div className="row center" hidden={view !== "commander"}>
-                <button type="button" disabled={!canCopyRight || copying} onClick={() => copy("left-to-right")}>
-                    Copy →
-                </button>
-                <button type="button" disabled={!canCopyLeft || copying} onClick={() => copy("right-to-left")}>
-                    ← Copy
-                </button>
-            </div>
+                    <div className="row center">
+                        <button type="button" disabled={!canCopyRight || copying} onClick={() => copy("left-to-right")}>
+                            Copy →
+                        </button>
+                        <button type="button" disabled={!canCopyLeft || copying} onClick={() => copy("right-to-left")}>
+                            ← Copy
+                        </button>
+                    </div>
 
-            {transferMessage !== null && view === "commander" && <p className="notice center">{transferMessage}</p>}
+                    {transferMessage !== null && <p className="notice center">{transferMessage}</p>}
+                </>
+            )}
         </main>
     );
 }

@@ -42,6 +42,8 @@ interface RequestOptions {
     rawBody?: Blob;
     /** Send without the bearer token (registration, login, and the Daemon-facing endpoints). */
     anonymous?: boolean;
+    /** Cancels the request when the caller no longer wants the answer (superseded listings). */
+    signal?: AbortSignal;
 }
 
 export async function send(path: string, options: RequestOptions = {}): Promise<Response> {
@@ -60,6 +62,7 @@ export async function send(path: string, options: RequestOptions = {}): Promise<
         method: options.method ?? "GET",
         headers,
         body: options.body === undefined ? options.rawBody : JSON.stringify(options.body),
+        signal: options.signal,
     });
 
     if (!response.ok) {

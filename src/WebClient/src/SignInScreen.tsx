@@ -4,9 +4,11 @@ import { login, register } from "./serverApi/auth";
 interface SignInScreenProps {
     onSignedIn: () => void;
     onFailure: (error: unknown) => string;
+    /** Why the last session ended, so an expiry does not look like the app vanishing. */
+    notice?: string | null;
 }
 
-export function SignInScreen({ onSignedIn, onFailure }: SignInScreenProps) {
+export function SignInScreen({ onSignedIn, onFailure, notice = null }: SignInScreenProps) {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [message, setMessage] = useState<string | null>(null);
@@ -75,7 +77,8 @@ export function SignInScreen({ onSignedIn, onFailure }: SignInScreenProps) {
                     </button>
                 </div>
             </form>
-            {message !== null && <p className="error">{message}</p>}
+            {/* A failed attempt speaks for itself and takes precedence over the older notice. */}
+            {(message ?? notice) !== null && <p className="error">{message ?? notice}</p>}
         </section>
     );
 }

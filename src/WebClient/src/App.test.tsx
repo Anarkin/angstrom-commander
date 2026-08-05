@@ -36,12 +36,15 @@ const projects: DirectoryEntry = {
     modifiedAt: "2026-07-30T09:00:00Z",
 };
 
+/** An override value for a request that must stay in flight for the rest of the test. */
+const pending = Symbol("pending");
+
 /** Routes each API path to a canned response, and records what was called. */
 function stubApi(overrides: Record<string, unknown> = {}) {
-    const calls: { method: string; url: string }[] = [];
+    const calls: { method: string; url: string; signal?: AbortSignal | null }[] = [];
     const fetchMock = vi.fn((input: URL | string, init?: RequestInit) => {
         const url = input instanceof URL ? input : new URL(input);
-        calls.push({ method: init?.method ?? "GET", url: url.pathname + url.search });
+        calls.push({ method: init?.method ?? "GET", url: url.pathname + url.search, signal: init?.signal });
 
         // A key may pin the method ("POST /api/pats") or match any ("/api/pats").
         const requestMethod = init?.method ?? "GET";
@@ -51,6 +54,12 @@ function stubApi(overrides: Record<string, unknown> = {}) {
                 (methodPart === null || methodPart === requestMethod) && (url.pathname + url.search).includes(pathPart)
             );
         });
+        if (match?.[1] === pending) {
+            return new Promise<Response>(() => {
+                // Deliberately never settles: the caller is testing what happens while it waits.
+            });
+        }
+
         const body =
             match?.[1] ??
             (url.pathname === "/api/daemons"
@@ -438,6 +447,186 @@ test("surfaces a sandbox refusal in the pane", async () => {
     await user.selectOptions(await screen.findByLabelText("Left: machine"), homeMachine.registrationId);
 
     expect(await screen.findByText(/outside the allowed roots/i)).toBeInTheDocument();
+});
+
+test("settings takes the file manager off the screen, and coming back keeps the pane where it was", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    stubApi({ "/list": [projects] });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(await screen.findByLabelText("Left: machine"), homeMachine.registrationId);
+    await user.click(await screen.findByText(/projects/));
+    await waitFor(() => {
+        expect(screen.getByLabelText("Left: path")).toHaveValue("/data/projects");
+    });
+
+    await user.click(screen.getByRole("button", { name: /settings/i }));
+
+    // Not merely invisible: `hidden` lost to the .panes/.row display rules, leaving the panes
+    // and their copy buttons live underneath the Settings cards.
+    expect(screen.queryByLabelText("Left: machine")).toBeNull();
+    expect(screen.queryByLabelText("Left: path")).toBeNull();
+    expect(screen.queryByRole("button", { name: /copy →/i })).toBeNull();
+
+    // The pane comes back where the user left it, not back at the machine's first root.
+    await user.click(screen.getByRole("button", { name: /hide settings/i }));
+    expect(await screen.findByLabelText("Left: path")).toHaveValue("/data/projects");
+});
+
+test("typing in the path box navigates nowhere until Enter", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    const calls = stubApi({ "/list": [projects] });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(await screen.findByLabelText("Left: machine"), homeMachine.registrationId);
+    await screen.findByText(/projects/);
+    const listCalls = () => calls.filter((call) => call.url.includes("/list")).length;
+    const before = listCalls();
+
+    const pathBox = screen.getByLabelText("Left: path");
+    await user.clear(pathBox);
+    await user.type(pathBox, "/data/projects");
+
+    // One request per keystroke is what this replaced: each half-typed path a sandbox refusal.
+    expect(listCalls()).toBe(before);
+    expect(pathBox).toHaveValue("/data/projects");
+
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+        expect(calls.some((call) => call.url.includes("/list?path=%2Fdata%2Fprojects"))).toBe(true);
+    });
+    expect(listCalls()).toBe(before + 1);
+});
+
+test("a superseded listing is cancelled, not just ignored", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    const calls = stubApi({ "/list": [notes] });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(await screen.findByLabelText("Left: machine"), homeMachine.registrationId);
+    await user.selectOptions(await screen.findByLabelText("Left: shared folder"), "/uploads");
+
+    await waitFor(() => {
+        expect(calls.some((call) => call.url.includes("/list?path=%2Fuploads"))).toBe(true);
+    });
+    const supersededListing = calls.find((call) => call.url.includes("/list?path=%2Fdata"));
+    expect(supersededListing?.signal?.aborted).toBe(true);
+});
+
+test("navigating with the path box drops the selection", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    stubApi({ "/list": [notes] });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(await screen.findByLabelText("Left: machine"), homeMachine.registrationId);
+    await user.selectOptions(screen.getByLabelText("Right: machine"), laptopMachine.registrationId);
+    await user.click((await screen.findAllByText(/notes\.txt/))[0]!);
+    expect(screen.getByRole("button", { name: /copy →/i })).toBeEnabled();
+
+    const pathBox = screen.getByLabelText("Left: path");
+    await user.clear(pathBox);
+    await user.type(pathBox, "/uploads{Enter}");
+
+    // The selected file belonged to the old directory; copying it from here is a 404 at best.
+    expect(screen.getByRole("button", { name: /copy →/i })).toBeDisabled();
+});
+
+test("copy waits until the target pane knows where it is", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    // The laptop's shared folders never arrive, so the right pane never gets a path.
+    const calls = stubApi({ [`${laptopMachine.registrationId}/roots`]: pending, "/list": [notes] });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(await screen.findByLabelText("Left: machine"), homeMachine.registrationId);
+    await user.click((await screen.findAllByText(/notes\.txt/))[0]!);
+    await user.selectOptions(screen.getByLabelText("Right: machine"), laptopMachine.registrationId);
+
+    const copyButton = screen.getByRole("button", { name: /copy →/i });
+    expect(copyButton).toBeDisabled();
+
+    await user.click(copyButton);
+
+    // Otherwise the file lands at "/notes.txt" — the root of whatever that machine shares.
+    expect(calls.some((call) => call.url.includes("/copy-to/"))).toBe(false);
+});
+
+test("switching the target machine forgets its predecessor's listing before a copy", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    // The laptop's listing never arrives: the only names on file are the previous machine's.
+    const calls = stubApi({
+        [`${laptopMachine.registrationId}/list`]: pending,
+        "/list": [notes],
+        "/copy-to/": { bytesTransferred: 1024 },
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(await screen.findByLabelText("Left: machine"), homeMachine.registrationId);
+    await user.selectOptions(screen.getByLabelText("Right: machine"), homeMachine.registrationId);
+    await waitFor(() => {
+        expect(screen.getAllByText(/notes\.txt/).length).toBe(2);
+    });
+    await user.click(screen.getAllByText(/notes\.txt/)[0]!);
+
+    await user.selectOptions(screen.getByLabelText("Right: machine"), laptopMachine.registrationId);
+    await user.click(screen.getByRole("button", { name: /copy →/i }));
+
+    expect(await screen.findByText(/copied notes\.txt/i)).toBeInTheDocument();
+    // Nothing is known to be there, so nothing is knowingly replaced.
+    expect(confirm).not.toHaveBeenCalled();
+    expect(calls.find((call) => call.url.includes("/copy-to/"))?.url).toContain("overwrite=false");
+});
+
+test("a machine that shares no folders says so instead of working forever", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    stubApi({ "/roots": [] });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(await screen.findByLabelText("Left: machine"), homeMachine.registrationId);
+
+    expect(await screen.findByText(/shares no folders/i)).toBeInTheDocument();
+    expect(screen.queryByText(/working/i)).toBeNull();
+});
+
+test("an expired session explains itself on the sign-in screen", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-stale");
+    vi.stubGlobal(
+        "fetch",
+        vi.fn(() => Promise.resolve(new Response(null, { status: 401 }))),
+    );
+    render(<App />);
+
+    expect(await screen.findByText(/session has expired/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /sign in/i })).toBeInTheDocument();
+});
+
+test("a keyboard user can open a directory from its row", async () => {
+    localStorage.setItem("angstrom.accessToken", "token-abc");
+    const calls = stubApi({ "/list": [projects] });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.selectOptions(await screen.findByLabelText("Left: machine"), homeMachine.registrationId);
+    await screen.findByText(/projects/);
+
+    // Row 0 is the header; row 1 is the directory. Focusable at all is the point.
+    const directoryRow = screen.getAllByRole("row")[1]!;
+    directoryRow.focus();
+    expect(directoryRow).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+        expect(calls.some((call) => call.url.includes("path=%2Fdata%2Fprojects"))).toBe(true);
+    });
+    expect(screen.getByLabelText("Left: path")).toHaveValue("/data/projects");
 });
 
 test("pairing a machine posts the code and refreshes the list", async () => {
