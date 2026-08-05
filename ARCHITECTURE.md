@@ -1,6 +1,6 @@
 # Angstrom Commander — architecture
 
-The what and why of the system: domain, components, tech stack, guardrails, security model, scaling, hosting, CI/CD, and diagrams. Working conventions live in [AGENTS.md](AGENTS.md); setup in [README.md](README.md).
+The what and why of the system: domain, components, tech stack, guardrails, security model, observability, scaling, hosting, CI/CD, and diagrams. Working conventions live in [AGENTS.md](AGENTS.md); setup in [README.md](README.md).
 
 ## Domain
 
@@ -136,6 +136,7 @@ Where the code actually is, as of August 2026 — a living list, so update it wh
 - The Daemon's private key sits unprotected on disk (no DPAPI/keychain/file-permission hardening) — the sandbox refuses to serve it however the roots are configured, but local file permissions must still be addressed before any real install story
 - The path sandbox resolves links and then opens by path, so a link swapped in between the two would not be caught. Closing that needs opening by handle (`O_NOFOLLOW` and the Windows equivalent); it requires local write access to a shared folder to exploit, so it waits
 - `MapOpenApi()` is not wired, so the contract exists only as a build artifact; there is no browsable API reference
+- The Server is close to unobservable: no request log, no application logging of its own, relay failures swallowed without a trace, and no audit trail — while EF Core prints every SQL statement it runs. § Observability has the measurements and the order the rework is worth doing in
 - The Server integration suite boots a factory per test, which is most of its runtime, and could share one
 - That suite runs on `TestServer`, not Kestrel, so no test can see a Kestrel-level limit. That is not academic: uploads over ~28.6 MB used to die on Kestrel's default 30 MB body cap — and be reported as *the machine* falling silent, since the limit surfaces as an `IOException` — and the whole suite stayed green throughout. The upload endpoint now lifts that cap explicitly (size is the wrong guard when the quota, bandwidth and concurrency ceilings already bound the cost), but proving it still means a real upload against a stamp or `docker compose`. A single smoke test on a real Kestrel host would close the class
 
@@ -162,6 +163,62 @@ The model the system is built toward, which includes parts not written yet (OAut
 - The Daemon connection nonce is single-use, and single-use atomically: read-then-remove is two steps, and two requests replaying one captured signature could both pass between them. A signature is valid forever, so the nonce is the only thing that stops a recorded connect from being replayed into fresh connection tokens
 - Path sandboxing in the Daemon: canonicalize all client-supplied paths and resolve every symbolic link and junction along them, then enforce allowed roots — canonicalizing alone is lexical, so a link planted inside a shared folder would otherwise read and write outside it. Resolution is a one-hop-at-a-time walk whose every result is re-resolved from the filesystem root down, bounded by a hop budget: asking the platform to follow a chain to its end and trusting the path it hands back is not enough on Unix, where that path can itself run through another link, and a two-link arrangement inside a shared folder would then pass the root check and be opened outside it. Each root carries a writable flag and read-only is the default, so sharing a folder never implies permission to change it — writes resolve only against writable roots. Mutations (delete, move, mkdir) resolve the parent fully but take the final component as-is: deleting or moving a link acts on the link, never on its target, and a shared root itself can never be deleted or renamed
 - AI access: the Agent and third-party MCP clients act only through the Server's MCP endpoint with user-scoped tokens (OAuth 2.1 or PATs) — same authorization and Daemon sandbox as any client, no extra access path. Confirmation of mutating ops lives where the user is: the built-in Agent's chat pane enforces it, while a third-party client's own UX (e.g. Claude Code's permission prompts) is trusted with it — the Server cannot see another client's screen, so what it enforces are ownership checks, writable-root flags, and instant token revocation; every AI session is listed and revocable on the "active sessions" page
+
+## Observability
+
+Where the running system's behaviour can be seen from, and — stated plainly because the gap is
+wide — how little of it currently can be. This section describes today; the rework below is on
+the roadmap, not done.
+
+**What exists.** Both Server and Daemon use the stock ASP.NET Core console logger: plain text to
+stdout, no Serilog, no OpenTelemetry, no Application Insights, no JSON formatter. Container Apps
+forwards stdout to a per-stamp **Log Analytics workspace** (`log-<env>`, PerGB2018, 30-day
+retention, wired to the Container Apps environment in `infra/main.tf`). Two different views, worth
+not confusing: `az containerapp logs show` is a live tail of the *current replica's* stdout —
+ephemeral, good for "what is this container doing right now" — while the workspace is the durable,
+queryable history, and `--type system` is the platform's own events (scaling, provisioning) rather
+than the app's output. There are no metrics, no traces, and no alerting beyond the subscription
+budget alert in § Operating costs.
+
+**A consequence of plain text:** every line lands in the workspace as one unstructured string, so
+KQL can only substring-match it. There is no querying by field, request, user or operation.
+
+**What is actually being logged — measured on the test stamp, August 2026:** about 91,000 lines
+and 4.7 MB of text a day, essentially all of it EF Core printing the SQL of every statement it
+runs (`Default: Information` puts `Microsoft.EntityFrameworkCore.Database.Command` at Information,
+and each query costs three or four lines). Parameter *values* are not exposed — sensitive-data
+logging is off, so they render as `@__p_0` — but the schema is, column lists included. Volume sits
+far inside Log Analytics' included 5 GB/month, so this costs nothing; what it costs is signal.
+
+**What is not logged, which is the actual state of things:**
+
+- `Microsoft.AspNetCore: Warning` turns off request logging, so there is no access log — nothing
+  records that a call arrived, who made it, or what it answered
+- The Server has no application logging of its own. Its single `ILogger` is a constructor
+  parameter `AuthenticationHandler` requires, and it is never used. Every structured log event in
+  the repo belongs to the Daemon
+- The relay endpoints catch `IOException`/`OperationCanceledException`/`TimeoutException`, bind the
+  exception only to the `when` filter, and discard it. A failed transfer answers the caller "the
+  machine did not answer" and leaves no server-side trace whatsoever. The transfer defects fixed in
+  § Implementation status were, by construction, invisible in these logs — which is the sharpest
+  argument in this section
+- Nothing is audited: sign-in failures, PAT use, unpair, and revocation leave no record. A PAT's
+  `LastUsedAt` is deliberately a coarse "is this still in use" signal and explicitly not an audit
+  log (§ Security model), so there is no other trail
+
+**The rework**, in the order it is worth doing:
+
+1. Two lines of configuration recover most of the loss — `Microsoft.EntityFrameworkCore.Database.Command`
+   down to Warning, `Microsoft.AspNetCore` up to Information — trading a log that is ~85 % SQL for
+   an actual request log. Deliberately *not* done yet: on a stamp being debugged by hand, seeing
+   every query is sometimes the point, so this is an environment decision rather than an obvious win
+2. Structured events on the Server for the things it currently stays silent about: relay operations,
+   transfer lifecycle and failures (those swallowed exceptions above), and auth outcomes — with a
+   correlation id carried across the relay, which the protocol already has in the transfer id
+3. OpenTelemetry with an Application Insights exporter, giving traces and metrics rather than lines,
+   and making a request traceable across WebClient → Server → Daemon
+4. An audit trail for the security-relevant events, which the "active sessions" page (§ Implementation
+   status) wants anyway
 
 ## Scaling
 
