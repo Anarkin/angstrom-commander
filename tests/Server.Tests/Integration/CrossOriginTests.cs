@@ -59,7 +59,7 @@ public sealed class CrossOriginTests(PostgresFixture postgres)
         // Exposed headers are advertised on the real response, not on the preflight.
         using var request = new HttpRequestMessage(HttpMethod.Get, new Uri("/healthz", UriKind.Relative));
         request.Headers.Add("Origin", WebClientOrigin);
-        using var response = await client.SendAsync(request);
+        using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
 
         Assert.Contains(
             "Content-Disposition",

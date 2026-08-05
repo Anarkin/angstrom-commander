@@ -23,7 +23,8 @@ public sealed class RequestValidationTests(PostgresFixture postgres)
 
         using var response = await client.PostAsJsonAsync(
             "/api/enrollment/claim",
-            new { code = "ABCD2345", displayName = new string('x', 201) });
+            new { code = "ABCD2345", displayName = new string('x', 201) },
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -37,7 +38,9 @@ public sealed class RequestValidationTests(PostgresFixture postgres)
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
         using var response = await client.PostAsJsonAsync(
-            "/api/enrollment/claim", new { code = "ABCD2345", displayName = "" });
+            "/api/enrollment/claim",
+            new { code = "ABCD2345", displayName = "" },
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -50,7 +53,8 @@ public sealed class RequestValidationTests(PostgresFixture postgres)
 
         using var response = await client.PostAsJsonAsync(
             "/api/enrollment/code",
-            new { publicKeySpki = new string('A', 1001), platform = "TestOS" });
+            new { publicKeySpki = new string('A', 1001), platform = "TestOS" },
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -63,7 +67,8 @@ public sealed class RequestValidationTests(PostgresFixture postgres)
 
         using var response = await client.PostAsJsonAsync(
             "/api/auth/register",
-            new { email = "long@example.com", password = new string('p', 4096) });
+            new { email = "long@example.com", password = new string('p', 4096) },
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -75,7 +80,9 @@ public sealed class RequestValidationTests(PostgresFixture postgres)
         using var client = factory.CreateClient();
 
         using var response = await client.PostAsJsonAsync(
-            "/api/auth/register", new { email = "not-an-email", password = Password });
+            "/api/auth/register",
+            new { email = "not-an-email", password = Password },
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }

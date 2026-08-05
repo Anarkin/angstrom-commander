@@ -8,14 +8,14 @@ public sealed class PostgresFixture : IAsyncLifetime
 
     public string ConnectionString => this._container.GetConnectionString();
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
-        return this._container.StartAsync();
+        return new ValueTask(this._container.StartAsync());
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return this._container.DisposeAsync().AsTask();
+        return this._container.DisposeAsync();
     }
 }
 

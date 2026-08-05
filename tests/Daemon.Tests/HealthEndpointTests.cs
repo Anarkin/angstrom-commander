@@ -10,7 +10,8 @@ public class HealthEndpointTests
         using var factory = new WebApplicationFactory<Program>();
         using var client = factory.CreateClient();
 
-        var response = await client.GetStringAsync(new Uri("/healthz", UriKind.Relative));
+        var response = await client.GetStringAsync(
+            new Uri("/healthz", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal("ok", response);
     }
