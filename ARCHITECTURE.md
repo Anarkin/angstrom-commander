@@ -206,19 +206,80 @@ far inside Log Analytics' included 5 GB/month, so this costs nothing; what it co
   `LastUsedAt` is deliberately a coarse "is this still in use" signal and explicitly not an audit
   log (§ Security model), so there is no other trail
 
-**The rework**, in the order it is worth doing:
+### Where it is going
 
-1. Two lines of configuration recover most of the loss — `Microsoft.EntityFrameworkCore.Database.Command`
-   down to Warning, `Microsoft.AspNetCore` up to Information — trading a log that is ~85 % SQL for
-   an actual request log. Deliberately *not* done yet: on a stamp being debugged by hand, seeing
-   every query is sometimes the point, so this is an environment decision rather than an obvious win
-2. Structured events on the Server for the things it currently stays silent about: relay operations,
-   transfer lifecycle and failures (those swallowed exceptions above), and auth outcomes — with a
-   correlation id carried across the relay, which the protocol already has in the transfer id
-3. OpenTelemetry with an Application Insights exporter, giving traces and metrics rather than lines,
-   and making a request traceable across WebClient → Server → Daemon
-4. An audit trail for the security-relevant events, which the "active sessions" page (§ Implementation
-   status) wants anyway
+None of this is built yet. See the "Telemetry" diagram at the bottom for the shape.
+
+**OpenTelemetry is the spine, not Serilog.** The code already logs through `ILogger`, and OTel
+rides on top of that rather than replacing it, so instrumenting is additive instead of a rewrite.
+Serilog is a logging library: it would still leave metrics and traces unsolved, and the repo would
+carry two logging abstractions to no end. On Azure the whole pipeline is one package
+(`Azure.Monitor.OpenTelemetry.AspNetCore`) wiring the SDK to an Application Insights exporter, and
+App Insights is backed by the same Log Analytics workspace the stamp already provisions — so this
+adds a dependency, not a bill. The console formatter also switches to JSON, which alone fixes the
+unstructured-string problem above for the fallback path.
+
+| Signal | Emitted by | Format | Lands in | Kept |
+| --- | --- | --- | --- | --- |
+| Logs | Server, through `ILogger` | structured — JSON console + OTLP | App Insights → `log-<env>` | 30 days |
+| Metrics | ASP.NET Core, EF Core and SignalR built-in meters, plus ours | OTLP | App Insights | 90 days (metrics are cheap) |
+| Traces | ASP.NET Core, HttpClient, EF Core instrumentation | OTLP, sampled | App Insights | 30 days |
+| Daemon logs | Daemon, through `ILogger` | console + rolling file | **the user's own disk** | size-capped, never exported |
+
+**Daemon telemetry stays on the user's machine.** This is a product decision before it is a
+technical one. A Daemon's logs are made of file paths, directory listings and machine names — the
+user's own data, from a product whose whole promise is that their files stay theirs. Shipping that
+to our cloud as routine telemetry would be a privacy breach dressed up as diagnostics. So the
+Daemon writes locally, rolling and size-capped inside its state directory, and exports nothing on
+its own. When something genuinely needs investigating, support asks the user for a diagnostic
+bundle and the user chooses to send it — consent at the moment it matters, rather than assumed
+once at install. It keeps the Daemon free of any cloud telemetry dependency too, which suits a
+component that deliberately has no inbound anything.
+
+The corollary binds the Server: it relays those same paths, so **paths are user data there as
+well**. They belong at Debug, not Information, and file contents belong nowhere. Never logged at
+any level, on either side: user and Daemon tokens, PAT values, the JWT signing key, Daemon private
+keys, and challenge nonces.
+
+**Correlation** is the part that is real work rather than configuration. W3C `traceparent` carries
+a trace across HTTP for free, but the relay's interesting hop is a SignalR invocation, which does
+not propagate trace context on its own — it has to travel explicitly in the protocol records. The
+transfer id already exists and is the natural correlation key for a transfer's whole life.
+
+**The metrics worth having**, each chosen because it answers a question this document already
+asks: how many Daemons are connected (a gauge, and the truest health signal there is — `/healthz`
+answers fine while the relay is dead); relayed bytes (this *is* the egress cost argument in
+§ Operating costs, currently unmeasured); relay operation duration and failure rate; transfer
+failures by cause (the defects fixed above were invisible precisely because nothing counted them);
+and rate-limit and quota rejections, which is how you tell a limit biting real users from a limit
+doing its job.
+
+**Levels** stop being per-author taste: Debug off outside development; Information for lifecycle
+and business events (a Daemon connected, a transfer completed, a PAT minted); Warning for
+refusals that are expected but worth seeing (sandbox denial, quota exceeded, a retry); Error for
+the unexpected, meaning a human should look; Critical only for "this process cannot continue" —
+no signing key, no database at startup.
+
+**Alerting** stays small enough to be believed: no Daemons connected, the Server's 5xx rate, and
+unhandled exceptions. The subscription budget alert in § Operating costs already covers spend.
+
+**In the order it is worth doing:**
+
+1. Two lines of configuration recover most of what is lost today —
+   `Microsoft.EntityFrameworkCore.Database.Command` down to Warning,
+   `Microsoft.AspNetCore` up to Information — trading a log that is ~85 % SQL for an actual
+   request log. Deliberately *not* taken yet: on a stamp being debugged by hand, seeing every
+   query is sometimes the point, so it is an environment decision rather than an obvious win
+2. Structured events on the Server for what it currently stays silent about — relay operations,
+   the transfer lifecycle and its failures (those discarded exceptions), and auth outcomes
+3. OpenTelemetry and the exporter, giving traces and metrics rather than lines, plus the
+   correlation id threaded through the relay
+4. An audit trail for the security-relevant events, which the "active sessions" page
+   (§ Implementation status) wants anyway
+
+**Deliberately deferred:** browser telemetry from the WebClient, which is a second consent surface
+and pointless before there are users; sampling tuning, until there is traffic worth sampling; and
+SLOs, which mean nothing before anyone depends on this.
 
 ## Scaling
 
@@ -553,3 +614,37 @@ flowchart TB
 ```
 
 How to read it: `infra/` *describes* the environment; Terraform makes Azure *match* the description (using its state file to know what already exists — so re-runs are no-ops and edits apply only deltas); every environment is the same description stamped into its own resource group; `azd up` = provision + deploy (make infrastructure exist, then put code into it), `azd down` = delete the stamp.
+
+### Telemetry — what is emitted, and where it is allowed to go (planned, per § Observability)
+
+```mermaid
+flowchart LR
+  human(["👤 Whoever is debugging"])
+
+  subgraph machines["User's machines — telemetry never leaves on its own"]
+    daemon["Daemon<br/><i>ILogger. Its logs are made of<br/>file paths and listings —<br/>the user's data, not ours</i>"]
+    dfile[("state/logs/<br/><i>rolling, size-capped</i>")]
+  end
+
+  subgraph stamp["Azure stamp"]
+    server["Server<br/><i>ILogger + Activity + Meter</i>"]
+    otel["OpenTelemetry SDK<br/><i>Azure Monitor exporter</i>"]
+    ai["Application Insights"]
+    law[("Log Analytics<br/><i>one workspace per stamp,<br/>30 days</i>")]
+    alerts["Alert rules<br/><i>no Daemons connected,<br/>5xx rate, unhandled errors</i>"]
+  end
+
+  daemon --> dfile
+  dfile -.->|"diagnostic bundle — only when<br/>support asks and the user sends it"| human
+  server --> otel
+  otel -->|"logs · metrics · traces"| ai
+  ai --> law
+  server -->|"stdout JSON — fallback and bootstrap"| law
+  law --> human
+  law --> alerts
+  alerts --> human
+```
+
+Key point: the arrow out of the user's machines is **dashed and human-initiated**. Everything the
+Daemon knows is the user's own file system, so routine telemetry export would be a privacy breach
+dressed as diagnostics — consent is asked at the moment it is needed, not assumed at install.
