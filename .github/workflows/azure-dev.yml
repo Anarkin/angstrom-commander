@@ -1,8 +1,10 @@
 name: Deploy to test
 
 # Deploys main to the test stamp, but only after the CI gates pass — a red main stays
-# on people's machines, it does not ship. workflow_run fires on CI completion for pushes
-# to main; the job guard filters to successful runs.
+# on people's machines, it does not ship. workflow_run fires on every CI completion whose
+# head branch is merely *named* main, and a fork's pull request can come from a branch
+# named main: without the job guard, a stranger's PR would run azd here, on its own code,
+# with this repo's Azure identity. The guard admits only green pushes to this repo.
 on:
   workflow_dispatch:
   workflow_run:
@@ -23,7 +25,12 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: >-
+      github.event_name == 'workflow_dispatch' || (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository
+      )
     runs-on: ubuntu-latest
     env:
       AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}

@@ -361,7 +361,7 @@ One discount is deliberately left out of the figures above: Container Apps inclu
 ## Source control & CI/CD
 
 - GitHub hosts the repo: <https://github.com/Anarkin/angstrom-commander> (private, personal account — free tier is ample for solo, incl. 2,000 Actions minutes/month)
-- CI/CD: GitHub Actions. Deploys are wired (July 2026): merges to main run the CI gates, and on success the `azure-dev.yml` workflow deploys to the test stamp — `azd provision` (idempotent, so infra changes ride along) + `azd deploy`, authenticating via the `msi-angstrom-commander` federated identity that `azd pipeline config` created (OIDC — no cloud secrets stored in GitHub)
+- CI/CD: GitHub Actions. Deploys are wired (July 2026): merges to main run the CI gates, and on success the `azure-dev.yml` workflow deploys to the test stamp — `azd provision` (idempotent, so infra changes ride along) + `azd deploy`, authenticating via the `msi-angstrom-commander` federated identity that `azd pipeline config` created (OIDC — no cloud secrets stored in GitHub). The deploy job admits only green CI runs triggered by a push to this repo: `workflow_run`'s `branches: [main]` filter matches a branch *name*, which a fork's pull request can share, so on its own it would hand a stranger's code the Azure identity
 - Every PR runs the full guardrail suite: build (warnings = errors), tests, `dotnet format`, ESLint/Prettier, contract-drift checks, and a compose smoke test that builds all three images and waits for the Daemon to reach the Server (`terraform fmt`/`validate` join it with `infra/`)
 - Later: PR-open spawns a demo env (`azd up` for `demo-prN`), PR-close tears it down
 
